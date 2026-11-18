@@ -57,10 +57,15 @@ def calculate_perpendicular_waypoints(
     )
 
 
-def extract_primary_highway_name(route_json: dict[str, Any], fallback_label: str) -> str:
+def extract_primary_highway_name(
+    route_json: dict[str, Any],
+    fallback_label: str,
+    used_names: Optional[set[str]] = None,
+) -> str:
     """
     Examine route step legs to find the predominant Interstate or US Highway.
-    Returns a clean label like 'Via I-80 W' or 'Via I-70 E'.
+    Returns a clean label like 'Via I-80 W' or 'Via I-76 / I-70'.
+    Deduplicates against previously used highway names.
     """
     highway_dist: dict[str, float] = {}
     legs = route_json.get("legs", [])
@@ -78,18 +83,35 @@ def extract_primary_highway_name(route_json: dict[str, Any], fallback_label: str
                 candidates.append(name)
 
             for cand in candidates:
-                cand_clean = cand.replace("Interstate ", "I-").replace("I ", "I-")
+                cand_clean = cand.replace("Interstate ", "I-").replace("I ", "I-").replace("Expressway", "Expy")
                 highway_dist[cand_clean] = highway_dist.get(cand_clean, 0.0) + dist
 
     if highway_dist:
-        # Pick the highway with the greatest distance coverage
-        top_highway = max(highway_dist.items(), key=lambda kv: kv[1])[0]
+        sorted_highways = sorted(highway_dist.items(), key=lambda kv: kv[1], reverse=True)
+
+        # Check if top highway was already used by a sibling route
+        if used_names:
+            for hw, _ in sorted_highways:
+                cand_label = f"Via {hw}"
+                if cand_label not in used_names and hw not in used_names:
+                    return cand_label
+
+            # If top is already used, combine top 2
+            if len(sorted_highways) >= 2:
+                top_1 = sorted_highways[0][0]
+                top_2 = sorted_highways[1][0]
+                combo = f"Via {top_2} / {top_1}"
+                if combo not in used_names:
+                    return combo
+
+        top_highway = sorted_highways[0][0]
         return f"Via {top_highway}"
 
     # If steps didn't have refs, check summary
     summary = route_json.get("summary")
     if summary and summary.strip():
-        return f"Via {summary.strip()}"
+        clean_sum = summary.strip().replace("Interstate ", "I-").replace("I ", "I-")
+        return f"Via {clean_sum}"
 
     return fallback_label
 
@@ -197,6 +219,7 @@ def fetch_three_routes(
     """
     routes_found: list[dict[str, Any]] = []
     seen_distances: set[int] = set()
+    used_names: set[str] = set()
 
     # Step 1: Query direct OSRM with alternatives=true
     direct_coords = f"{origin_lon},{origin_lat};{dest_lon},{dest_lat}"
@@ -213,7 +236,8 @@ def fetch_three_routes(
         dist_key = int(dist_miles // 5)
         if dist_key not in seen_distances and len(coords) >= 2:
             seen_distances.add(dist_key)
-            name = extract_primary_highway_name(r, f"Direct Corridor {i + 1}")
+            name = extract_primary_highway_name(r, f"Direct Corridor {i + 1}", used_names=used_names)
+            used_names.add(name)
             adj_dur = adjust_truck_travel_time(dist_miles, dur_sec)
             routes_found.append({
                 "name": name,
@@ -252,10 +276,13 @@ def fetch_three_routes(
                 dist_key = int(dist_miles // 5)
                 if dist_key not in seen_distances and len(coords) >= 2:
                     seen_distances.add(dist_key)
-                    name = extract_primary_highway_name(cr, corridor_label)
+                    hw_name = extract_primary_highway_name(cr, corridor_label, used_names=used_names)
+                    route_name = f"{corridor_label} ({hw_name})" if corridor_label not in hw_name else hw_name
+                    used_names.add(route_name)
+                    used_names.add(hw_name)
                     adj_dur = adjust_truck_travel_time(dist_miles, dur_sec)
                     routes_found.append({
-                        "name": f"{corridor_label} ({name})",
+                        "name": route_name,
                         "distance_miles": dist_miles,
                         "travel_time_seconds": adj_dur,
                         "geometry": geom,
@@ -288,11 +315,18 @@ def fetch_three_routes(
     routes_found.sort(key=lambda r: r["travel_time_seconds"])
     final_3 = routes_found[:3]
 
+    # Ensure all 3 names are unique
+    seen_final_names: set[str] = set()
     result = []
     for idx, r in enumerate(final_3):
+        r_name = r["name"]
+        if r_name in seen_final_names:
+            r_name = f"{r_name} (Alt {idx + 1})"
+        seen_final_names.add(r_name)
+
         result.append({
             "route_id": f"route_{idx + 1}",
-            "name": r["name"],
+            "name": r_name,
             "distance_miles": r["distance_miles"],
             "travel_time_seconds": r["travel_time_seconds"],
             "geometry": r["geometry"],

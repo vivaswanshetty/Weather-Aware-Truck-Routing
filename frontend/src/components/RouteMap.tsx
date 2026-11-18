@@ -57,9 +57,9 @@ export const RouteMap: React.FC<RouteMapProps> = ({
       }
       if (hasCoords) {
         map.fitBounds(bounds, {
-          padding: { top: 60, bottom: 200, left: 380, right: 390 },
-          maxZoom: 7.5,
-          duration: 850,
+          padding: { top: 65, bottom: 205, left: 55, right: 395 },
+          maxZoom: 8.5,
+          duration: 750,
         });
       }
     } catch {
@@ -123,20 +123,21 @@ export const RouteMap: React.FC<RouteMapProps> = ({
         source: 'corridor-heatmap',
         paint: {
           'heatmap-weight': ['get', 'weight'],
-          'heatmap-intensity': ['interpolate', ['linear'], ['zoom'], 3, 0.7, 8, 2.0],
+          'heatmap-intensity': ['interpolate', ['linear'], ['zoom'], 3, 0.8, 8, 2.2],
           'heatmap-color': [
             'interpolate',
             ['linear'],
             ['heatmap-density'],
-            0, 'rgba(0, 0, 0, 0)',
-            0.12, 'rgba(16, 185, 129, 0.28)',
-            0.32, 'rgba(245, 158, 11, 0.50)',
-            0.55, 'rgba(249, 115, 22, 0.68)',
-            0.78, 'rgba(239, 68, 68, 0.82)',
-            1.0, 'rgba(225, 29, 72, 0.92)',
+            0.0, 'rgba(0, 0, 0, 0)',
+            0.08, 'rgba(16, 185, 129, 0.35)',
+            0.25, 'rgba(56, 189, 248, 0.45)',
+            0.45, 'rgba(245, 158, 11, 0.60)',
+            0.68, 'rgba(249, 115, 22, 0.78)',
+            0.88, 'rgba(239, 68, 68, 0.88)',
+            1.0, 'rgba(217, 70, 239, 0.95)',
           ],
-          'heatmap-radius': ['interpolate', ['linear'], ['zoom'], 3, 28, 5, 48, 7, 78, 9, 115],
-          'heatmap-opacity': 0.62,
+          'heatmap-radius': ['interpolate', ['linear'], ['zoom'], 3, 30, 5, 52, 7, 85, 9, 125],
+          'heatmap-opacity': 0.70,
         },
       });
 
@@ -345,12 +346,14 @@ export const RouteMap: React.FC<RouteMapProps> = ({
       let weight = 0.2;
 
       if (heatmapMetric === 'risk') {
-        weight = (metric.risk_level - 1) / 4.0;
+        const baseRisk = (metric.risk_level - 1) / 4.0;
+        const windFactor = Math.min(0.2, (metric.wind_mph / 60.0) * 0.2);
+        weight = Math.max(0.14, baseRisk * 0.8 + 0.14 + windFactor);
       } else if (heatmapMetric === 'wind') {
-        weight = Math.min(1.0, metric.wind_mph / 60.0);
+        weight = Math.max(0.12, Math.min(1.0, metric.wind_mph / 50.0));
       } else if (heatmapMetric === 'precip') {
-        const eqPrecip = metric.rain_in_hr + metric.snow_in_hr * 0.3;
-        weight = Math.min(1.0, eqPrecip / 1.0);
+        const eqPrecip = metric.rain_in_hr + metric.snow_in_hr * 0.35;
+        weight = eqPrecip > 0.01 ? Math.max(0.18, Math.min(1.0, eqPrecip / 0.5)) : 0.05;
       }
 
       return {
@@ -360,7 +363,7 @@ export const RouteMap: React.FC<RouteMapProps> = ({
           coordinates: [pt.lon, pt.lat],
         },
         properties: {
-          weight: Math.max(0.05, Math.min(1.0, weight)),
+          weight: Math.max(0.08, Math.min(1.0, weight)),
           risk_level: metric.risk_level,
           wind_mph: metric.wind_mph,
           rain_in_hr: metric.rain_in_hr,
@@ -451,28 +454,31 @@ export const RouteMap: React.FC<RouteMapProps> = ({
       cpSource.setData({ type: 'FeatureCollection', features: cpFeatures });
     }
 
-    // D. Render On-Map Interstate Callout Badges at Midpoint of Each Route
+    // D. Render Staggered On-Map Interstate Callout Badges
     routeBadgeMarkersRef.current.forEach((m) => m.remove());
     routeBadgeMarkersRef.current = [];
+
+    const badgeRatios = [0.32, 0.52, 0.68];
 
     routes.forEach((r, idx) => {
       const coords = r.geometry?.coordinates;
       if (!coords || coords.length === 0) return;
 
-      const midIdx = Math.floor(coords.length / 2);
-      const [midLon, midLat] = coords[midIdx];
+      const ratio = badgeRatios[idx % badgeRatios.length];
+      const targetIdx = Math.min(coords.length - 1, Math.max(0, Math.floor(coords.length * ratio)));
+      const [midLon, midLat] = coords[targetIdx];
       const isSelected = r.route_id === activeRouteId;
 
       const badgeEl = document.createElement('div');
-      badgeEl.className = 'route-callout-badge cursor-pointer';
+      badgeEl.className = `route-callout-badge cursor-pointer ${isSelected ? 'z-20 relative' : 'z-10 relative'}`;
       badgeEl.innerHTML = `
-        <div class="px-2 py-1 rounded border text-[10px] font-mono tabular-nums shadow-lg flex items-center gap-1.5 transition-all ${
+        <div class="px-2 py-1 rounded border text-[10px] font-mono tabular-nums shadow-xl flex items-center gap-1.5 transition-all select-none ${
           isSelected
-            ? 'bg-[#0f172a] border-sky-400 text-sky-200 font-bold ring-1 ring-sky-400/40'
-            : 'bg-[#0b0f17]/90 border-slate-700 text-slate-300 hover:border-slate-500'
+            ? 'bg-[#0f172a] border-sky-400 text-sky-200 font-bold ring-2 ring-sky-400/50 scale-105'
+            : 'bg-[#0b0f17]/95 border-slate-700 text-slate-300 hover:border-slate-500 hover:text-white'
         }">
-          <span class="text-slate-400">#${idx + 1}</span>
-          <span class="truncate max-w-[120px]">${r.name.replace(/^Via\s+/i, '')}</span>
+          <span class="text-sky-400 font-bold">#${idx + 1}</span>
+          <span class="truncate max-w-[130px] font-sans">${r.name.replace(/^Via\s+/i, '')}</span>
           <span class="text-slate-500">•</span>
           <span>${r.travel_time_formatted}</span>
         </div>
@@ -487,8 +493,11 @@ export const RouteMap: React.FC<RouteMapProps> = ({
       routeBadgeMarkersRef.current.push(marker);
     });
 
-    // E. Fit corridor bounds
-    fitCorridorBounds();
+    // E. Fit corridor bounds with a short delay to ensure canvas dimension is settled
+    const timer = setTimeout(() => {
+      fitCorridorBounds();
+    }, 80);
+    return () => clearTimeout(timer);
   }, [routes, activeRouteId, activeRoute, onSelectRoute, fitCorridorBounds]);
 
   // 4. Update Truck Position on Slider Scrub

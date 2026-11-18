@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import {
   Truck,
   ArrowRightLeft,
@@ -73,8 +73,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onOpenRulesModal,
 }) => {
   const [filterElevatedOnly, setFilterElevatedOnly] = useState<boolean>(false);
+  const tableBodyRef = useRef<HTMLDivElement>(null);
 
   const activeRoute = routes.find((r) => r.route_id === activeRouteId) || routes[0];
+
+  // Reset checkpoint log scroll to 0m (top) whenever active route or routes change
+  useEffect(() => {
+    if (tableBodyRef.current) {
+      tableBodyRef.current.scrollTop = 0;
+    }
+  }, [activeRouteId, routes]);
 
   const handleSwapLocations = () => {
     const temp = origin;
@@ -92,21 +100,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
     onAnalyze({ sample_interval_miles: val });
   };
 
-  const handleWeatherModeToggle = () => {
-    const next = weatherMode === 'live' ? 'simulated_storm' : 'live';
-    setWeatherMode(next);
-    onAnalyze({ weather_mode: next });
+  const handleWeatherModeSelect = (mode: 'live' | 'simulated_storm') => {
+    setWeatherMode(mode);
+    onAnalyze({ weather_mode: mode });
   };
 
   // Active load rule caption
   const activeRuleCaption = useMemo(() => {
     if (loadWeight > 40000) {
-      return '>40,000 lb rule active: 35–44 mph wind escalates to SEVERE';
+      return '>40,000 lb rule: 35–44 mph wind escalates to SEVERE';
     }
     if (loadWeight > 30000) {
-      return '>30,000 lb rule active: 45–54 mph wind escalates to NO TRAVEL';
+      return '>30,000 lb rule: 45–54 mph wind escalates to NO TRAVEL';
     }
-    return 'Standard baseline: 45–54 mph is SEVERE, ≥55 mph is NO TRAVEL';
+    return 'Standard baseline: 45–54 mph SEVERE, ≥55 mph NO TRAVEL';
   }, [loadWeight]);
 
   // Filtered checkpoints for data table
@@ -119,7 +126,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   return (
     <aside className="w-full lg:w-[360px] h-full bg-[#0b0f17] border-r border-slate-800/90 flex flex-col shrink-0 overflow-hidden text-slate-100 z-30 font-sans">
       {/* Top Header */}
-      <div className="p-3 border-b border-slate-800/90 bg-[#070b11]/90 flex items-center justify-between">
+      <div className="p-2.5 border-b border-slate-800/90 bg-[#070b11]/90 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-2">
           <div className="bg-sky-500/10 border border-sky-500/20 p-1.5 rounded text-sky-400">
             <Truck className="w-4 h-4" />
@@ -137,7 +144,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
         <button
           onClick={onOpenRulesModal}
-          className="text-[11px] font-mono h-7 px-2 rounded bg-[#111827] hover:bg-slate-800 text-slate-300 border border-slate-700/80 flex items-center gap-1 transition-colors"
+          className="text-[11px] font-mono h-6.5 px-2 rounded bg-[#111827] hover:bg-slate-800 text-slate-300 border border-slate-700/80 flex items-center gap-1 transition-colors cursor-pointer"
           title="View Official Wind, Rain, Snow & Weight Rules"
         >
           <Info className="w-3 h-3 text-sky-400" />
@@ -145,15 +152,41 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </button>
       </div>
 
-      {/* Scrollable Upper Control Panel */}
-      <div className="p-3 space-y-3 overflow-y-auto shrink-0 max-h-[58vh] border-b border-slate-800/80">
+      {/* Compact Top Dispatch Controls (shrink-0, 100% visible without scrolling) */}
+      <div className="p-2.5 space-y-2 shrink-0 border-b border-slate-800/90 bg-[#0b0f17]">
+        {/* Prominent Quick-Switch: Live Weather Feed vs Simulated Storm */}
+        <div className="grid grid-cols-2 gap-1 p-0.5 bg-[#070b11] rounded border border-slate-800/90">
+          <button
+            onClick={() => handleWeatherModeSelect('live')}
+            className={`py-1 px-2 text-[10px] font-mono rounded flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+              weatherMode === 'live'
+                ? 'bg-emerald-950 border border-emerald-500/80 text-emerald-300 font-bold shadow-sm'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <span className={`w-1.5 h-1.5 rounded-full ${weatherMode === 'live' ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600'}`} />
+            <span>Live Open-Meteo</span>
+          </button>
+          <button
+            onClick={() => handleWeatherModeSelect('simulated_storm')}
+            className={`py-1 px-2 text-[10px] font-mono rounded flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+              weatherMode === 'simulated_storm'
+                ? 'bg-amber-950 border border-amber-500/80 text-amber-300 font-bold shadow-sm'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <CloudLightning className="w-3 h-3 text-amber-400" />
+            <span>Storm Simulation</span>
+          </button>
+        </div>
+
         {/* Corridor Presets Grid */}
         <div>
-          <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-400 mb-1.5 flex items-center justify-between">
-            <span>Corridor Presets</span>
+          <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-400 mb-1 flex items-center justify-between">
+            <span>Corridors</span>
             <span className="text-[9px] font-mono text-slate-500">1-Click Load</span>
           </div>
-          <div className="grid grid-cols-2 gap-1.5">
+          <div className="grid grid-cols-2 gap-1">
             {presets.map((preset) => {
               const codes: Record<string, string> = {
                 chicago_denver: 'ORD → DEN',
@@ -167,12 +200,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <button
                   key={preset.id}
                   onClick={() => onSelectPreset(preset)}
-                  className="text-left px-2 py-1.5 rounded bg-[#111827]/90 hover:bg-[#182338] border border-slate-800 hover:border-slate-700 text-xs transition-all group cursor-pointer"
+                  className="text-left px-2 py-1 rounded bg-[#111827]/90 hover:bg-[#182338] border border-slate-800 hover:border-slate-700 text-xs transition-all group cursor-pointer"
                 >
                   <div className="font-mono font-bold text-slate-200 group-hover:text-sky-300 text-[11px]">
                     {code}
                   </div>
-                  <div className="text-[10px] text-slate-500 truncate mt-0.5 font-mono tabular-nums">
+                  <div className="text-[9px] text-slate-500 truncate font-mono tabular-nums">
                     {(preset.default_load_weight_lbs / 1000).toFixed(0)}k lb • {preset.default_interval_miles}mi
                   </div>
                 </button>
@@ -182,7 +215,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
 
         {/* Origin & Destination Inputs */}
-        <div className="bg-[#0e1420]/70 rounded-md p-2.5 border border-slate-800/80 space-y-2">
+        <div className="bg-[#0e1420]/70 rounded-md p-2 border border-slate-800/80 space-y-1.5">
           <div className="relative flex items-center">
             <span className="absolute left-2.5 top-1/2 -translate-y-1/2 w-1.5 h-1.5 rounded-full bg-emerald-400" />
             <input
@@ -195,10 +228,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
 
           <div className="flex items-center justify-between px-1">
-            <span className="text-[10px] uppercase font-mono text-slate-500 tracking-wider">Route Waypoints</span>
+            <span className="text-[9px] uppercase font-mono text-slate-500 tracking-wider">Waypoints</span>
             <button
               onClick={handleSwapLocations}
-              className="h-5 px-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-slate-200 border border-slate-700 text-[10px] flex items-center gap-1 transition-colors"
+              className="h-4.5 px-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-slate-200 border border-slate-700 text-[9px] flex items-center gap-1 transition-colors cursor-pointer"
               title="Swap Origin and Destination"
             >
               <ArrowRightLeft className="w-2.5 h-2.5" />
@@ -221,7 +254,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         {/* 2-Column: Departure & Sampling Interval */}
         <div className="grid grid-cols-2 gap-2">
           <div>
-            <label className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-400 flex items-center gap-1 mb-1">
+            <label className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-400 flex items-center gap-1 mb-0.5">
               <Calendar className="w-3 h-3 text-sky-400" />
               <span>Departure</span>
             </label>
@@ -234,7 +267,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
 
           <div>
-            <label className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-400 flex items-center gap-1 mb-1">
+            <label className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-400 flex items-center gap-1 mb-0.5">
               <Layers className="w-3 h-3 text-sky-400" />
               <span>Interval</span>
             </label>
@@ -243,7 +276,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <button
                   key={interval}
                   onClick={() => handleIntervalChange(interval)}
-                  className={`flex-1 py-0.5 text-[10px] font-mono rounded transition-all ${
+                  className={`flex-1 py-0.5 text-[10px] font-mono rounded transition-all cursor-pointer ${
                     sampleInterval === interval
                       ? 'bg-sky-600 text-white font-semibold'
                       : 'text-slate-400 hover:text-slate-200'
@@ -257,7 +290,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
 
         {/* Gross Load Weight Controls */}
-        <div className="bg-[#0e1420]/70 rounded-md p-2.5 border border-slate-800/80 space-y-1.5">
+        <div className="bg-[#0e1420]/70 rounded-md p-2 border border-slate-800/80 space-y-1">
           <div className="flex items-center justify-between text-xs">
             <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-400 flex items-center gap-1">
               <Weight className="w-3 h-3 text-amber-400" />
@@ -284,10 +317,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
             {activeRuleCaption}
           </p>
 
-          <div className="grid grid-cols-3 gap-1 pt-1">
+          <div className="grid grid-cols-3 gap-1 pt-0.5">
             <button
               onClick={() => handleWeightPillClick(25000)}
-              className={`py-1 text-[10px] font-mono rounded border transition-all ${
+              className={`py-0.5 text-[10px] font-mono rounded border transition-all cursor-pointer ${
                 loadWeight === 25000
                   ? 'bg-emerald-950 border-emerald-500 text-emerald-300 font-bold'
                   : 'bg-[#070b11] border-slate-800 text-slate-400 hover:text-slate-200'
@@ -297,51 +330,38 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </button>
             <button
               onClick={() => handleWeightPillClick(35000)}
-              className={`py-1 text-[10px] font-mono rounded border transition-all ${
+              className={`py-0.5 text-[10px] font-mono rounded border transition-all cursor-pointer ${
                 loadWeight === 35000
                   ? 'bg-rose-950 border-rose-500 text-rose-300 font-bold'
                   : 'bg-[#070b11] border-slate-800 text-slate-400 hover:text-slate-200'
               }`}
             >
-              35k lb (&gt;30k)
+              35k (&gt;30k)
             </button>
             <button
               onClick={() => handleWeightPillClick(45000)}
-              className={`py-1 text-[10px] font-mono rounded border transition-all ${
+              className={`py-0.5 text-[10px] font-mono rounded border transition-all cursor-pointer ${
                 loadWeight === 45000
                   ? 'bg-orange-950 border-orange-500 text-orange-300 font-bold'
                   : 'bg-[#070b11] border-slate-800 text-slate-400 hover:text-slate-200'
               }`}
             >
-              45k lb (&gt;40k)
+              45k (&gt;40k)
             </button>
           </div>
         </div>
 
-        {/* Action Row: Weather Mode Toggle & Calculate Dispatch Button */}
-        <div className="flex items-center gap-2 pt-1">
-          <button
-            onClick={handleWeatherModeToggle}
-            className={`h-8 px-2.5 rounded border text-[10px] font-mono flex items-center gap-1 transition-all shrink-0 cursor-pointer ${
-              weatherMode === 'simulated_storm'
-                ? 'bg-amber-950/80 border-amber-500 text-amber-300 font-bold'
-                : 'bg-[#070b11] border-slate-800 text-slate-400 hover:text-slate-200'
-            }`}
-            title="Toggle between real Open-Meteo forecast and deterministic simulated storm front"
-          >
-            <CloudLightning className="w-3 h-3 text-amber-400" />
-            <span>{weatherMode === 'simulated_storm' ? 'Storm Mode' : 'Live Feed'}</span>
-          </button>
-
+        {/* Action Row: Full-Width High-Contrast Calculate Dispatch Button */}
+        <div>
           <button
             onClick={() => onAnalyze()}
             disabled={isLoading}
-            className="flex-1 h-8 px-3 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white font-medium text-xs rounded shadow flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+            className="w-full h-8 px-3 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white font-medium text-xs rounded shadow flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
           >
             {isLoading ? (
               <>
                 <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                <span className="font-mono text-[11px]">Calculating...</span>
+                <span className="font-mono text-[11px]">Calculating Dispatch...</span>
               </>
             ) : (
               <>
@@ -363,7 +383,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       {/* Checkpoint Telemetry Table (Bottom Half of Sidebar) */}
       <div className="flex-1 flex flex-col min-h-0 bg-[#070b11]/80">
-        <div className="p-2.5 border-b border-slate-800/80 bg-[#0e1420]/80 flex items-center justify-between text-xs">
+        <div className="p-2.5 border-b border-slate-800/80 bg-[#0e1420]/80 flex items-center justify-between text-xs shrink-0">
           <div className="flex items-center gap-1.5">
             <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-300">
               Checkpoint Telemetry Log
@@ -375,7 +395,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
           <button
             onClick={() => setFilterElevatedOnly(!filterElevatedOnly)}
-            className={`text-[10px] font-mono h-5 px-2 rounded border flex items-center gap-1 transition-all ${
+            className={`text-[10px] font-mono h-5 px-2 rounded border flex items-center gap-1 transition-all cursor-pointer ${
               filterElevatedOnly
                 ? 'bg-amber-950 border-amber-500 text-amber-300 font-bold'
                 : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200'
@@ -387,8 +407,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </button>
         </div>
 
-        {/* Table Body */}
-        <div className="flex-1 overflow-y-auto">
+        {/* Table Body with tableBodyRef */}
+        <div ref={tableBodyRef} className="flex-1 overflow-y-auto">
           {filteredCheckpoints.length === 0 ? (
             <div className="p-4 text-center text-slate-500 text-xs font-mono">
               No checkpoints matching filter.
