@@ -1,6 +1,10 @@
 import { AnalyzeRequest, AnalyzeResponse, PresetsResponse } from '../types/routing';
 
-const rawBase = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api';
+const defaultBase = import.meta.env.DEV
+  ? 'http://localhost:8000/api'
+  : 'https://spotter-routing-backend.onrender.com/api';
+
+const rawBase = import.meta.env.VITE_API_BASE_URL || defaultBase;
 const cleanBase = rawBase.replace(/\/+$/, '');
 const API_BASE_URL = cleanBase.endsWith('/api') ? cleanBase : `${cleanBase}/api`;
 
