@@ -220,7 +220,7 @@ def build_corridor_heatmap(
     grid_min_lon = min_lon - pad
     grid_max_lon = max_lon + pad
 
-    cols = 22  # Longitudinal width
+    cols = 32  # Denser longitudinal resolution across East-West corridor
     rows = 14  # Latitudinal height
     lat_step = (grid_max_lat - grid_min_lat) / max(1, rows - 1)
     lon_step = (grid_max_lon - grid_min_lon) / max(1, cols - 1)
@@ -243,9 +243,11 @@ def build_corridor_heatmap(
     for r in range(rows):
         pt_lat = round(grid_min_lat + r * lat_step, 4)
         cos_pt = math.cos(math.radians(pt_lat))
+        # Hexagonal staggering: offset odd rows horizontally by half a step to eliminate vertical grid striping
+        hex_offset = (lon_step * 0.5) if (r % 2 == 1) else 0.0
 
         for c in range(cols):
-            pt_lon = round(grid_min_lon + c * lon_step, 4)
+            pt_lon = round(grid_min_lon + c * lon_step + hex_offset, 4)
 
             # Compute organic corridor falloff factor
             falloff = 1.0

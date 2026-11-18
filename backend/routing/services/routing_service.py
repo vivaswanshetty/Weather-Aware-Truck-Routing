@@ -25,36 +25,57 @@ def calculate_perpendicular_waypoints(
     lon1: float,
     lat2: float,
     lon2: float,
-    offset_ratio: float = 0.16,
+    offset_ratio: float = 0.20,
 ) -> tuple[tuple[float, float], tuple[float, float]]:
     """
     Calculate two intermediate waypoints (Left/North and Right/South) perpendicular
     to the direct path between origin and destination.
 
-    offset_ratio: fraction of straight-line distance to shift (default ~16%).
+    offset_ratio: fraction of straight-line distance to shift (default ~20%).
     Returns ((lat_north, lon_north), (lat_south, lon_south)).
+    Guarantees lat_north is geographically north of lat_south regardless of travel direction.
     """
     mid_lat = (lat1 + lat2) / 2.0
     mid_lon = (lon1 + lon2) / 2.0
 
-    cos_lat = math.cos(math.radians(mid_lat))
-    cos_lat = max(0.2, cos_lat)  # prevent division by zero in polar latitudes
+    cos_lat = max(0.2, math.cos(math.radians(mid_lat)))
 
     d_lat = lat2 - lat1
     d_lon = (lon2 - lon1) * cos_lat
 
-    # For an eastbound trip (d_lon > 0, d_lat = 0), a 90-degree counter-clockwise
-    # rotation (Left / North) shifts latitude positive (+d_lon) and longitude (-d_lat).
-    offset_lat_north = mid_lat + (offset_ratio * d_lon)
-    offset_lon_north = mid_lon - ((offset_ratio * d_lat) / cos_lat)
+    # For East-West corridors (|d_lon| >= |d_lat|), the northern waypoint must have strictly higher latitude
+    if abs(d_lon) >= abs(d_lat):
+        lat_shift = abs(offset_ratio * d_lon)
+        lon_shift = (offset_ratio * d_lat) / cos_lat if abs(d_lat) > 0.01 else 0.0
 
-    offset_lat_south = mid_lat - (offset_ratio * d_lon)
-    offset_lon_south = mid_lon + ((offset_ratio * d_lat) / cos_lat)
+        offset_lat_north = mid_lat + lat_shift
+        offset_lon_north = mid_lon - lon_shift
+
+        offset_lat_south = mid_lat - lat_shift
+        offset_lon_south = mid_lon + lon_shift
+    else:
+        # North-South corridors (|d_lat| > |d_lon|): lateral shift is longitudinal (West / East)
+        lon_shift = abs(offset_ratio * d_lat) / cos_lat
+        lat_shift = (offset_ratio * d_lon)
+
+        offset_lat_north = mid_lat + abs(lat_shift) * 0.5
+        offset_lon_north = mid_lon - lon_shift  # West
+
+        offset_lat_south = mid_lat - abs(lat_shift) * 0.5
+        offset_lon_south = mid_lon + lon_shift  # East
 
     return (
         (round(offset_lat_north, 4), round(offset_lon_north, 4)),
         (round(offset_lat_south, 4), round(offset_lon_south, 4)),
     )
+
+
+def compute_route_mean_lat(geom: dict[str, Any]) -> float:
+    """Calculate mean latitude of route coordinates for corridor classification."""
+    coords = geom.get("coordinates", [])
+    if not coords:
+        return 0.0
+    return sum(c[1] for c in coords) / len(coords)
 
 
 def extract_primary_highway_name(
@@ -310,16 +331,27 @@ def fetch_three_routes(
         )
         routes_found.append(fb)
 
-    # Step 4: Format and assign stable route_id (route_1, route_2, route_3)
+    # Step 4: Format, Validate Geographically, and assign stable route_id (route_1, route_2, route_3)
     # Sort initially by shortest travel time
     routes_found.sort(key=lambda r: r["travel_time_seconds"])
     final_3 = routes_found[:3]
 
-    # Ensure all 3 names are unique
+    # Calculate baseline mean latitude from primary route
+    base_lat = compute_route_mean_lat(final_3[0]["geometry"])
+
+    # Ensure all 3 names are unique and geographically truthful
     seen_final_names: set[str] = set()
     result = []
     for idx, r in enumerate(final_3):
         r_name = r["name"]
+        r_lat = compute_route_mean_lat(r["geometry"])
+
+        # Strictly verify geographic reality: never label a route running through southern states as Northern
+        if "Northern" in r_name and r_lat < (base_lat - 0.15):
+            r_name = r_name.replace("Northern", "Southern")
+        elif "Southern" in r_name and r_lat > (base_lat + 0.15):
+            r_name = r_name.replace("Southern", "Northern")
+
         if r_name in seen_final_names:
             r_name = f"{r_name} (Alt {idx + 1})"
         seen_final_names.add(r_name)

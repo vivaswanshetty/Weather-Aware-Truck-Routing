@@ -142,7 +142,7 @@ export const RouteMap: React.FC<RouteMapProps> = ({
             0.88, 'rgba(239, 68, 68, 0.88)',
             1.0, 'rgba(217, 70, 239, 0.95)',
           ],
-          'heatmap-radius': ['interpolate', ['linear'], ['zoom'], 3, 30, 5, 52, 7, 85, 9, 125],
+          'heatmap-radius': ['interpolate', ['linear'], ['zoom'], 3, 38, 4, 52, 5, 68, 6, 88, 7, 110, 9, 140],
           'heatmap-opacity': 0.70,
         },
       });
@@ -501,21 +501,55 @@ export const RouteMap: React.FC<RouteMapProps> = ({
       cpSource.setData({ type: 'FeatureCollection', features: cpFeatures });
     }
 
-    // D. Render Staggered On-Map Interstate Callout Badges
+    // D. Render On-Map Interstate Callout Badges with Smart Distance Maximization
     routeBadgeMarkersRef.current.forEach((m) => m.remove());
     routeBadgeMarkersRef.current = [];
 
-    const badgeRatios = [0.32, 0.52, 0.68];
+    const placedBadgeCoords: [number, number][] = [];
 
     routes.forEach((r, idx) => {
       const coords = r.geometry?.coordinates;
       if (!coords || coords.length === 0) return;
 
-      const ratio = badgeRatios[idx % badgeRatios.length];
-      const targetIdx = Math.min(coords.length - 1, Math.max(0, Math.floor(coords.length * ratio)));
-      const [midLon, midLat] = coords[targetIdx];
-      const isSelected = r.route_id === activeRouteId;
+      let chosenLon = coords[Math.floor(coords.length * 0.5)][0];
+      let chosenLat = coords[Math.floor(coords.length * 0.5)][1];
 
+      if (placedBadgeCoords.length === 0) {
+        // First route: place near center (46% of path)
+        const midIdx = Math.floor(coords.length * 0.46);
+        chosenLon = coords[midIdx][0];
+        chosenLat = coords[midIdx][1];
+      } else {
+        // Subsequent routes: test candidate points along [25% .. 75%] to maximize distance to existing badges
+        let bestMinDist2 = -1;
+        const startIdx = Math.floor(coords.length * 0.25);
+        const endIdx = Math.floor(coords.length * 0.75);
+        const step = Math.max(1, Math.floor((endIdx - startIdx) / 16));
+
+        for (let i = startIdx; i <= endIdx; i += step) {
+          const candLon = coords[i][0];
+          const candLat = coords[i][1];
+          const cosLat = Math.cos((candLat * Math.PI) / 180);
+
+          let minDist2 = Infinity;
+          for (const [pLon, pLat] of placedBadgeCoords) {
+            const dLat = candLat - pLat;
+            const dLon = (candLon - pLon) * cosLat;
+            const d2 = dLat * dLat + dLon * dLon;
+            if (d2 < minDist2) minDist2 = d2;
+          }
+
+          if (minDist2 > bestMinDist2) {
+            bestMinDist2 = minDist2;
+            chosenLon = candLon;
+            chosenLat = candLat;
+          }
+        }
+      }
+
+      placedBadgeCoords.push([chosenLon, chosenLat]);
+
+      const isSelected = r.route_id === activeRouteId;
       const badgeEl = document.createElement('div');
       badgeEl.className = 'route-callout-badge cursor-pointer';
       badgeEl.style.width = 'max-content';
@@ -542,7 +576,7 @@ export const RouteMap: React.FC<RouteMapProps> = ({
       };
 
       const marker = new maplibregl.Marker({ element: badgeEl, anchor: 'center' })
-        .setLngLat([midLon, midLat])
+        .setLngLat([chosenLon, chosenLat])
         .addTo(map);
 
       routeBadgeMarkersRef.current.push(marker);
