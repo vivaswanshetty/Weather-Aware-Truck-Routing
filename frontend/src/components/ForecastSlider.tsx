@@ -1,5 +1,16 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Play, Pause, RotateCcw, Activity, Wind, CloudRain, Eye, EyeOff } from 'lucide-react';
+import {
+  Play,
+  Pause,
+  RotateCcw,
+  Activity,
+  Wind,
+  CloudRain,
+  Eye,
+  EyeOff,
+  BarChart2,
+  ChevronDown,
+} from 'lucide-react';
 import { HeatmapMetricMode, Checkpoint } from '../types/routing';
 import { RISK_COLORS, getRiskHex, formatTimestamp } from '../utils/riskColors';
 
@@ -14,6 +25,8 @@ interface ForecastSliderProps {
   checkpoints?: Checkpoint[];
   selectedCheckpoint?: Checkpoint | null;
   onSelectCheckpoint?: (cp: Checkpoint | null) => void;
+  isChartOpen?: boolean;
+  onToggleChartOpen?: () => void;
 }
 
 export const ForecastSlider: React.FC<ForecastSliderProps> = ({
@@ -27,6 +40,8 @@ export const ForecastSlider: React.FC<ForecastSliderProps> = ({
   checkpoints = [],
   selectedCheckpoint,
   onSelectCheckpoint,
+  isChartOpen = true,
+  onToggleChartOpen,
 }) => {
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [hoveredCp, setHoveredCp] = useState<Checkpoint | null>(null);
@@ -84,20 +99,31 @@ export const ForecastSlider: React.FC<ForecastSliderProps> = ({
   return (
     <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-20 w-[94%] max-w-4xl bg-[#0b0f17]/95 backdrop-blur-md border border-slate-800/90 rounded-lg shadow-2xl text-slate-100 flex flex-col overflow-hidden">
       {/* Top Strip: Interactive Checkpoint Weather & Risk Profile Chart */}
-      {checkpoints.length > 0 && (
+      {checkpoints.length > 0 && isChartOpen && (
         <div className="px-3 pt-2 pb-1.5 border-b border-slate-800/70 bg-[#0e1420]/60 relative">
           <div className="flex items-center justify-between text-[10px] uppercase font-mono text-slate-400 mb-1">
             <span className="flex items-center gap-1.5 tracking-wider">
               <span className="w-1.5 h-1.5 rounded-full bg-sky-400" />
               Corridor Wind & Risk Profile (Mile 0 → {checkpoints[checkpoints.length - 1]?.milepost.toFixed(0)} mi)
             </span>
-            {hoveredCp ? (
-              <span className="text-slate-200 font-semibold font-mono tabular-nums">
-                MI {hoveredCp.milepost.toFixed(1)} • {hoveredCp.wind_speed_mph.toFixed(0)} mph • {hoveredCp.overall_risk}
-              </span>
-            ) : (
-              <span className="text-slate-500 font-mono">Hover bar for checkpoint telemetry</span>
-            )}
+            <div className="flex items-center gap-2">
+              {hoveredCp ? (
+                <span className="text-slate-200 font-semibold font-mono tabular-nums">
+                  MI {hoveredCp.milepost.toFixed(1)} • {hoveredCp.wind_speed_mph.toFixed(0)} mph • {hoveredCp.overall_risk}
+                </span>
+              ) : (
+                <span className="text-slate-500 font-mono">Hover bar for checkpoint telemetry</span>
+              )}
+              {onToggleChartOpen && (
+                <button
+                  onClick={onToggleChartOpen}
+                  className="p-0.5 rounded hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition-colors ml-1 cursor-pointer"
+                  title="Collapse profile chart"
+                >
+                  <ChevronDown className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
           </div>
 
           {/* Bar Chart Container */}
@@ -141,7 +167,7 @@ export const ForecastSlider: React.FC<ForecastSliderProps> = ({
       {/* Bottom Strip: 0-48h Forecast Scrubber & Controls */}
       <div className="p-3 space-y-2.5">
         <div className="flex flex-wrap items-center justify-between gap-2.5 text-xs">
-          {/* Left: Play/Pause/Reset & Hour Badge */}
+          {/* Left: Play/Pause/Reset & Hour Badge & Profile Toggle */}
           <div className="flex items-center gap-1.5">
             <button
               onClick={togglePlay}
@@ -163,6 +189,21 @@ export const ForecastSlider: React.FC<ForecastSliderProps> = ({
             >
               <RotateCcw className="w-3 h-3" />
             </button>
+
+            {onToggleChartOpen && (
+              <button
+                onClick={onToggleChartOpen}
+                className={`h-7 px-2 rounded border flex items-center gap-1 text-[11px] font-mono transition-colors cursor-pointer ${
+                  isChartOpen
+                    ? 'bg-slate-800 border-slate-700 text-sky-400'
+                    : 'bg-[#111827] border-slate-800 text-slate-400 hover:text-slate-200'
+                }`}
+                title={isChartOpen ? 'Collapse profile chart' : 'Expand profile chart'}
+              >
+                <BarChart2 className="w-3 h-3" />
+                <span className="hidden sm:inline">Profile</span>
+              </button>
+            )}
 
             <div className="h-7 bg-[#111827] border border-slate-800 px-2.5 rounded flex items-center gap-2 font-mono tabular-nums text-[11px]">
               <span className="font-bold text-sky-400">+{forecastHour}h</span>

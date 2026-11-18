@@ -15,6 +15,8 @@ interface RouteMapProps {
   showHeatmap: boolean;
   heatmapMetric: HeatmapMetricMode;
   heatmapData?: HeatmapData;
+  isRightDeckOpen?: boolean;
+  isBottomChartOpen?: boolean;
 }
 
 const CARTO_DARK_STYLE = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
@@ -29,6 +31,8 @@ export const RouteMap: React.FC<RouteMapProps> = ({
   showHeatmap,
   heatmapMetric,
   heatmapData,
+  isRightDeckOpen = true,
+  isBottomChartOpen = true,
 }) => {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
@@ -39,7 +43,7 @@ export const RouteMap: React.FC<RouteMapProps> = ({
 
   const activeRoute = routes.find((r) => r.route_id === activeRouteId) || routes[0];
 
-  // Helper: Fit map bounds tightly to routes corridor
+  // Helper: Fit map bounds tightly to routes corridor with clearance for right deck and bottom dock
   const fitCorridorBounds = useCallback(() => {
     const map = mapRef.current;
     if (!map || !routes || routes.length === 0) return;
@@ -56,16 +60,18 @@ export const RouteMap: React.FC<RouteMapProps> = ({
         }
       }
       if (hasCoords) {
+        const rightPad = isRightDeckOpen ? 430 : 80;
+        const bottomPad = isBottomChartOpen ? 220 : 120;
         map.fitBounds(bounds, {
-          padding: { top: 65, bottom: 205, left: 55, right: 395 },
-          maxZoom: 8.5,
+          padding: { top: 80, bottom: bottomPad, left: 70, right: rightPad },
+          maxZoom: 7.2,
           duration: 750,
         });
       }
     } catch {
       // Ignore boundary errors
     }
-  }, [routes]);
+  }, [routes, isRightDeckOpen, isBottomChartOpen]);
 
   // Helper: compute truck coordinate at forecastHour along active route
   const getTruckPosition = useCallback((): { lat: number; lon: number; currentCp: Checkpoint } | null => {
@@ -196,7 +202,7 @@ export const RouteMap: React.FC<RouteMapProps> = ({
         layout: { 'line-join': 'round', 'line-cap': 'round' },
         paint: {
           'line-color': '#020617',
-          'line-width': 7.5,
+          'line-width': 8.0,
           'line-opacity': 0.95,
         },
       });
@@ -208,63 +214,62 @@ export const RouteMap: React.FC<RouteMapProps> = ({
         layout: { 'line-join': 'round', 'line-cap': 'round' },
         paint: {
           'line-color': ['get', 'risk_color'],
-          'line-width': 4.5,
+          'line-width': 5.0,
           'line-opacity': 1.0,
         },
       });
 
-      // D. Checkpoint Markers (Hierarchical Sizing to Prevent Overlap)
+      // D. Checkpoint Markers (Precision Dots Scaled by Zoom to Prevent Overlapping Blobs)
       map.addSource('active-checkpoints', {
         type: 'geojson',
         data: { type: 'FeatureCollection', features: [] },
       });
 
-      // Subtle Outer Halo ONLY on High, Severe, and No Travel
-      map.addLayer({
-        id: 'active-checkpoints-halo',
-        type: 'circle',
-        source: 'active-checkpoints',
-        filter: ['in', 'overall_risk', 'HIGH', 'SEVERE', 'NO_TRAVEL'],
-        paint: {
-          'circle-radius': [
-            'match',
-            ['get', 'overall_risk'],
-            'NO_TRAVEL', 16,
-            'SEVERE', 13,
-            'HIGH', 10,
-            6,
-          ],
-          'circle-color': ['get', 'risk_color'],
-          'circle-opacity': 0.22,
-        },
-      });
-
-      // Core Checkpoint Circle with Severity Sizing
+      // Crisp Checkpoint Circles with Zoom-Scaled Radii
       map.addLayer({
         id: 'active-checkpoints-circle',
         type: 'circle',
         source: 'active-checkpoints',
         paint: {
           'circle-radius': [
-            'match',
-            ['get', 'overall_risk'],
-            'NO_TRAVEL', 9.5,
-            'SEVERE', 8.0,
-            'HIGH', 6.5,
-            'MODERATE', 5.0,
-            3.5, // LOW: tiny 3.5px dot so highway underneath is clearly visible
+            'interpolate',
+            ['linear'],
+            ['zoom'],
+            4,
+            [
+              'match',
+              ['get', 'overall_risk'],
+              'NO_TRAVEL', 4.0,
+              'SEVERE', 3.5,
+              'HIGH', 3.0,
+              'MODERATE', 2.5,
+              2.0,
+            ],
+            7,
+            [
+              'match',
+              ['get', 'overall_risk'],
+              'NO_TRAVEL', 5.5,
+              'SEVERE', 5.0,
+              'HIGH', 4.0,
+              'MODERATE', 3.0,
+              2.5,
+            ],
+            10,
+            [
+              'match',
+              ['get', 'overall_risk'],
+              'NO_TRAVEL', 7.5,
+              'SEVERE', 6.5,
+              'HIGH', 5.5,
+              'MODERATE', 4.5,
+              3.5,
+            ],
           ],
           'circle-color': ['get', 'risk_color'],
-          'circle-stroke-width': [
-            'match',
-            ['get', 'overall_risk'],
-            'NO_TRAVEL', 2.0,
-            'SEVERE', 1.75,
-            'HIGH', 1.5,
-            'MODERATE', 1.25,
-            1.0,
-          ],
-          'circle-stroke-color': '#0f172a',
+          'circle-stroke-width': 1.0,
+          'circle-stroke-color': '#070b11',
+          'circle-pitch-alignment': 'map',
         },
       });
 
@@ -304,6 +309,10 @@ export const RouteMap: React.FC<RouteMapProps> = ({
       // Truck Position Marker
       const truckEl = document.createElement('div');
       truckEl.className = 'truck-marker flex items-center justify-center';
+      truckEl.style.width = '28px';
+      truckEl.style.height = '28px';
+      truckEl.style.position = 'absolute';
+      truckEl.style.pointerEvents = 'none';
       truckEl.innerHTML = `
         <div class="relative flex items-center justify-center">
           <span class="animate-ping absolute inline-flex h-6 w-6 rounded-full bg-sky-400 opacity-60"></span>
@@ -327,7 +336,7 @@ export const RouteMap: React.FC<RouteMapProps> = ({
     };
   }, [onSelectRoute, onSelectCheckpoint]);
 
-  // 2. Update Heatmap Radar Layer (60 FPS, updates GeoJSON source only)
+  // 2. Update Heatmap Radar Layer (60 FPS, updates GeoJSON source only, organic boundary feathering)
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapLoadedRef.current) return;
@@ -340,40 +349,78 @@ export const RouteMap: React.FC<RouteMapProps> = ({
       return;
     }
 
-    const clampedHour = Math.max(0, Math.min(48, Math.round(forecastHour)));
-    const features: GeoJSON.Feature[] = heatmapData.points.map((pt) => {
-      const metric = pt.hourly[clampedHour] || pt.hourly[0];
-      let weight = 0.2;
-
-      if (heatmapMetric === 'risk') {
-        const baseRisk = (metric.risk_level - 1) / 4.0;
-        const windFactor = Math.min(0.2, (metric.wind_mph / 60.0) * 0.2);
-        weight = Math.max(0.14, baseRisk * 0.8 + 0.14 + windFactor);
-      } else if (heatmapMetric === 'wind') {
-        weight = Math.max(0.12, Math.min(1.0, metric.wind_mph / 50.0));
-      } else if (heatmapMetric === 'precip') {
-        const eqPrecip = metric.rain_in_hr + metric.snow_in_hr * 0.35;
-        weight = eqPrecip > 0.01 ? Math.max(0.18, Math.min(1.0, eqPrecip / 0.5)) : 0.05;
+    // Downsample route coordinates for fast corridor distance feathering
+    const sampleCoords: [number, number][] = [];
+    if (routes && routes.length > 0) {
+      for (const r of routes) {
+        const c = r.geometry?.coordinates;
+        if (c) {
+          const step = Math.max(1, Math.floor(c.length / 40));
+          for (let i = 0; i < c.length; i += step) {
+            sampleCoords.push(c[i] as [number, number]);
+          }
+        }
       }
+    }
 
-      return {
-        type: 'Feature',
-        geometry: {
-          type: 'Point',
-          coordinates: [pt.lon, pt.lat],
-        },
-        properties: {
-          weight: Math.max(0.08, Math.min(1.0, weight)),
-          risk_level: metric.risk_level,
-          wind_mph: metric.wind_mph,
-          rain_in_hr: metric.rain_in_hr,
-          snow_in_hr: metric.snow_in_hr,
-        },
-      };
-    });
+    const clampedHour = Math.max(0, Math.min(48, Math.round(forecastHour)));
+    const features: GeoJSON.Feature[] = heatmapData.points
+      .map((pt) => {
+        let falloff = pt.falloff;
+        if ((falloff === undefined || falloff === 1.0) && sampleCoords.length > 0) {
+          let minDist2 = Infinity;
+          const cosLat = Math.cos((pt.lat * Math.PI) / 180);
+          for (const [rLon, rLat] of sampleCoords) {
+            const dLat = pt.lat - rLat;
+            const dLon = (pt.lon - rLon) * cosLat;
+            const d2 = dLat * dLat + dLon * dLon;
+            if (d2 < minDist2) minDist2 = d2;
+          }
+          const distDeg = Math.sqrt(minDist2);
+          falloff = Math.max(0.0, Math.min(1.0, 1.0 - Math.pow(distDeg / 1.8, 1.6)));
+        }
+        falloff = falloff ?? 1.0;
+
+        // Feather outer boundary to zero - eliminate rectangular box edges
+        if (falloff <= 0.04) {
+          return null;
+        }
+
+        const metric = pt.hourly[clampedHour] || pt.hourly[0];
+        let weight = 0.2;
+
+        if (heatmapMetric === 'risk') {
+          const baseRisk = (metric.risk_level - 1) / 4.0;
+          const windFactor = Math.min(0.2, (metric.wind_mph / 60.0) * 0.2);
+          weight = Math.max(0.14, baseRisk * 0.8 + 0.14 + windFactor);
+        } else if (heatmapMetric === 'wind') {
+          weight = Math.max(0.12, Math.min(1.0, metric.wind_mph / 50.0));
+        } else if (heatmapMetric === 'precip') {
+          const eqPrecip = metric.rain_in_hr + metric.snow_in_hr * 0.35;
+          weight = eqPrecip > 0.01 ? Math.max(0.18, Math.min(1.0, eqPrecip / 0.5)) : 0.05;
+        }
+
+        const featheredWeight = weight * falloff;
+
+        return {
+          type: 'Feature',
+          geometry: {
+            type: 'Point',
+            coordinates: [pt.lon, pt.lat],
+          },
+          properties: {
+            weight: Math.max(0.02, Math.min(1.0, featheredWeight)),
+            risk_level: metric.risk_level,
+            wind_mph: metric.wind_mph,
+            rain_in_hr: metric.rain_in_hr,
+            snow_in_hr: metric.snow_in_hr,
+          },
+        };
+      })
+      .filter(Boolean) as GeoJSON.Feature[];
 
     source.setData({ type: 'FeatureCollection', features });
-  }, [forecastHour, showHeatmap, heatmapMetric, heatmapData]);
+  }, [forecastHour, showHeatmap, heatmapMetric, heatmapData, routes]);
 
   // 3. Update Routes Geometry, Segments, Checkpoints & On-Map Badges
   useEffect(() => {
@@ -470,21 +517,29 @@ export const RouteMap: React.FC<RouteMapProps> = ({
       const isSelected = r.route_id === activeRouteId;
 
       const badgeEl = document.createElement('div');
-      badgeEl.className = `route-callout-badge cursor-pointer ${isSelected ? 'z-20 relative' : 'z-10 relative'}`;
+      badgeEl.className = 'route-callout-badge cursor-pointer';
+      badgeEl.style.width = 'max-content';
+      badgeEl.style.maxWidth = '220px';
+      badgeEl.style.position = 'absolute';
+      badgeEl.style.whiteSpace = 'nowrap';
+      badgeEl.style.pointerEvents = 'auto';
       badgeEl.innerHTML = `
-        <div class="px-2 py-1 rounded border text-[10px] font-mono tabular-nums shadow-xl flex items-center gap-1.5 transition-all select-none ${
+        <div class="inline-flex items-center w-max max-w-[200px] whitespace-nowrap px-2 py-1 rounded border text-[10px] font-mono tabular-nums shadow-xl gap-1.5 transition-all select-none ${
           isSelected
-            ? 'bg-[#0f172a] border-sky-400 text-sky-200 font-bold ring-2 ring-sky-400/50 scale-105'
-            : 'bg-[#0b0f17]/95 border-slate-700 text-slate-300 hover:border-slate-500 hover:text-white'
+            ? 'bg-[#0f172a] border-sky-400 text-sky-200 font-bold ring-2 ring-sky-400/50 scale-105 z-20'
+            : 'bg-[#0b0f17]/95 border-slate-700 text-slate-300 hover:border-slate-500 hover:text-white z-10'
         }">
           <span class="text-sky-400 font-bold">#${idx + 1}</span>
-          <span class="truncate max-w-[130px] font-sans">${r.name.replace(/^Via\s+/i, '')}</span>
+          <span class="truncate max-w-[120px] font-sans">${r.name.replace(/^Via\s+/i, '')}</span>
           <span class="text-slate-500">•</span>
           <span>${r.travel_time_formatted}</span>
         </div>
       `;
 
-      badgeEl.onclick = () => onSelectRoute(r.route_id);
+      badgeEl.onclick = (e) => {
+        e.stopPropagation();
+        onSelectRoute(r.route_id);
+      };
 
       const marker = new maplibregl.Marker({ element: badgeEl, anchor: 'center' })
         .setLngLat([midLon, midLat])
@@ -499,6 +554,14 @@ export const RouteMap: React.FC<RouteMapProps> = ({
     }, 80);
     return () => clearTimeout(timer);
   }, [routes, activeRouteId, activeRoute, onSelectRoute, fitCorridorBounds]);
+
+  // 4. Re-fit camera bounds smoothly when right deck or bottom profile chart collapses/expands
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      fitCorridorBounds();
+    }, 120);
+    return () => clearTimeout(timer);
+  }, [isRightDeckOpen, isBottomChartOpen, fitCorridorBounds]);
 
   // 4. Update Truck Position on Slider Scrub
   useEffect(() => {

@@ -76,6 +76,7 @@ export interface HourlyWeatherMetric {
 export interface HeatmapPoint {
   lat: number;
   lon: number;
+  falloff?: number;
   hourly: HourlyWeatherMetric[];
 }
 

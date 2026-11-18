@@ -241,6 +241,12 @@ class RouteAnalyzeView(APIView):
             load_weight_lbs=load_weight_lbs,
         )
 
+        # Collect all coordinates from the 3 routes for organic corridor feathering
+        all_corridor_coords: list[list[float]] = []
+        for r in raw_routes:
+            coords = r.get("geometry", {}).get("coordinates", [])
+            all_corridor_coords.extend(coords)
+
         # 7. Corridor Heatmap Generation (0-48 hours)
         heatmap = build_corridor_heatmap(
             corridor_bounds=corridor_bounds,
@@ -248,6 +254,7 @@ class RouteAnalyzeView(APIView):
             weather_mode=weather_mode,
             load_weight_lbs=load_weight_lbs,
             departure_time=departure_dt,
+            corridor_coords=all_corridor_coords,
         )
 
         # 8. Build structured response

@@ -17,6 +17,31 @@
   letter-spacing: -0.02em;
 }
 
+/* Ensure MapLibre markers are always strictly absolute and never expand full-width */
+.maplibregl-marker {
+  position: absolute !important;
+  top: 0;
+  left: 0;
+  width: max-content !important;
+  height: auto !important;
+  will-change: transform;
+  pointer-events: auto !important;
+}
+
+.route-callout-badge {
+  display: inline-flex !important;
+  width: max-content !important;
+  max-width: 220px !important;
+  white-space: nowrap !important;
+  pointer-events: auto !important;
+}
+
+.truck-marker {
+  width: 28px !important;
+  height: 28px !important;
+  pointer-events: none !important;
+}
+
 /* Custom dark scrollbar */
 ::-webkit-scrollbar {
   width: 4px;

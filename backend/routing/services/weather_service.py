@@ -201,10 +201,12 @@ def build_corridor_heatmap(
     weather_mode: str = "live",
     load_weight_lbs: float = 0.0,
     departure_time: Optional[datetime] = None,
+    corridor_coords: Optional[list[list[float]]] = None,
 ) -> dict[str, Any]:
     """
     Generate a high-density 0-48 hour spatial heatmap grid (22 x 14 = 308 points)
-    spanning the route corridor with smooth Inverse Distance Weighting (IDW) interpolation.
+    spanning the route corridor with smooth Inverse Distance Weighting (IDW) interpolation
+    and organic corridor boundary feathering (no hard rectangular box edges).
 
     For each point, computes a 49-element array (hours 0 through 48)
     containing [wind_mph, rain_in_hr, snow_in_hr, temperature_f, risk_level].
@@ -225,6 +227,16 @@ def build_corridor_heatmap(
 
     heatmap_points: list[dict[str, Any]] = []
 
+    # Downsample corridor coordinates for fast distance calculation
+    sampled_corridor: list[tuple[float, float]] = []
+    if corridor_coords:
+        step = max(1, len(corridor_coords) // 100)
+        for i in range(0, len(corridor_coords), step):
+            pt = corridor_coords[i]
+            if len(pt) >= 2:
+                # pt is [lon, lat]
+                sampled_corridor.append((pt[1], pt[0]))
+
     # Pre-extract cluster coordinates for IDW spatial interpolation
     cluster_pts = list(cluster_weather_map.keys())
 
@@ -234,6 +246,18 @@ def build_corridor_heatmap(
 
         for c in range(cols):
             pt_lon = round(grid_min_lon + c * lon_step, 4)
+
+            # Compute organic corridor falloff factor
+            falloff = 1.0
+            if sampled_corridor:
+                min_d2 = min(
+                    (pt_lat - c_lat) ** 2 + ((pt_lon - c_lon) * cos_pt) ** 2
+                    for c_lat, c_lon in sampled_corridor
+                )
+                min_d_deg = math.sqrt(min_d2)
+                # Smooth feathering: 1.0 near corridor, down to 0.0 at ~1.8 degrees away
+                falloff = max(0.0, min(1.0, 1.0 - (min_d_deg / 1.8) ** 1.6))
+
             hourly_series: list[dict[str, Any]] = []
 
             if weather_mode == "simulated_storm":
@@ -320,6 +344,7 @@ def build_corridor_heatmap(
             heatmap_points.append({
                 "lat": pt_lat,
                 "lon": pt_lon,
+                "falloff": round(falloff, 3),
                 "hourly": hourly_series,
             })
 

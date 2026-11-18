@@ -46,6 +46,8 @@ export default function App() {
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [isRulesModalOpen, setIsRulesModalOpen] = useState<boolean>(false);
+  const [isRightDeckOpen, setIsRightDeckOpen] = useState<boolean>(true);
+  const [isBottomChartOpen, setIsBottomChartOpen] = useState<boolean>(true);
 
   const activeRoute = useMemo(
     () => routes.find((r) => r.route_id === activeRouteId) || routes[0],
@@ -166,6 +168,8 @@ export default function App() {
           showHeatmap={showHeatmap}
           heatmapMetric={heatmapMetric}
           heatmapData={heatmapData}
+          isRightDeckOpen={isRightDeckOpen}
+          isBottomChartOpen={isBottomChartOpen}
         />
 
         {/* Floating Top-Right 3-Route Comparison & Recommendation Deck */}
@@ -174,6 +178,8 @@ export default function App() {
           activeRouteId={activeRouteId}
           onSelectRoute={setActiveRouteId}
           recommendationReason={recommendationReason}
+          isOpen={isRightDeckOpen}
+          onToggleOpen={() => setIsRightDeckOpen((prev) => !prev)}
         />
 
         {/* Floating Bottom Corridor Timeline & Weather Profile Bar */}
@@ -188,6 +194,8 @@ export default function App() {
           checkpoints={activeRoute?.checkpoints || []}
           selectedCheckpoint={selectedCheckpoint}
           onSelectCheckpoint={setSelectedCheckpoint}
+          isChartOpen={isBottomChartOpen}
+          onToggleChartOpen={() => setIsBottomChartOpen((prev) => !prev)}
         />
       </main>
 

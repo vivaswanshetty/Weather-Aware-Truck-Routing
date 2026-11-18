@@ -1,5 +1,13 @@
 import React from 'react';
-import { ShieldCheck, AlertOctagon, CheckCircle2, ChevronRight, Navigation } from 'lucide-react';
+import {
+  ShieldCheck,
+  AlertOctagon,
+  CheckCircle2,
+  ChevronRight,
+  Navigation,
+  PanelRightClose,
+  PanelRightOpen,
+} from 'lucide-react';
 import { RouteOption } from '../types/routing';
 import { getRiskHex, getRiskBadgeClass } from '../utils/riskColors';
 
@@ -8,6 +16,8 @@ interface RouteComparisonDeckProps {
   activeRouteId: string;
   onSelectRoute: (id: string) => void;
   recommendationReason: string | null;
+  isOpen?: boolean;
+  onToggleOpen?: () => void;
 }
 
 export const RouteComparisonDeck: React.FC<RouteComparisonDeckProps> = ({
@@ -15,15 +25,42 @@ export const RouteComparisonDeck: React.FC<RouteComparisonDeckProps> = ({
   activeRouteId,
   onSelectRoute,
   recommendationReason,
+  isOpen = true,
+  onToggleOpen,
 }) => {
   if (!routes || routes.length === 0) return null;
 
   const recommendedRoute = routes.find((r) => r.is_recommended) || routes[0];
+  const activeRoute = routes.find((r) => r.route_id === activeRouteId) || recommendedRoute;
   const isAdvised = recommendedRoute?.is_travel_advised ?? true;
+
+  // Minimized Compact Pill View
+  if (!isOpen) {
+    return (
+      <div
+        onClick={onToggleOpen}
+        className="absolute top-4 right-4 z-20 bg-[#0b0f17]/95 hover:bg-[#131b2b] backdrop-blur-md border border-slate-700/80 hover:border-slate-500 rounded-md shadow-2xl text-slate-100 px-3 py-1.5 flex items-center gap-2 cursor-pointer transition-all select-none"
+        title="Expand corridor comparison deck"
+      >
+        <Navigation className="w-3.5 h-3.5 text-sky-400" />
+        <span className="text-[11px] font-mono font-bold text-slate-200">
+          3 Routes
+        </span>
+        <span className="text-slate-600">•</span>
+        <span className="text-[11px] text-sky-300 font-medium truncate max-w-[150px]">
+          #{routes.findIndex((r) => r.route_id === activeRouteId) + 1} {activeRoute.name.replace(/^Via\s+/i, '')}
+        </span>
+        <span className={`text-[9px] font-mono font-bold px-1.5 py-0.5 rounded ${getRiskBadgeClass(activeRoute.overall_route_risk)}`}>
+          {activeRoute.overall_route_risk}
+        </span>
+        <PanelRightOpen className="w-3.5 h-3.5 text-slate-400 hover:text-slate-200 ml-0.5" />
+      </div>
+    );
+  }
 
   return (
     <div className="absolute top-4 right-4 z-20 w-[368px] max-w-[calc(100vw-32px)] bg-[#0b0f17]/95 backdrop-blur-md border border-slate-800/90 rounded-lg shadow-2xl text-slate-100 flex flex-col overflow-hidden">
-      {/* Top Header: Telemetry Title & Recommendation Status */}
+      {/* Top Header: Telemetry Title, Recommendation Status & Minimize Button */}
       <div className="p-3 border-b border-slate-800/80 bg-[#0e1420]/80">
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-1.5">
@@ -33,7 +70,7 @@ export const RouteComparisonDeck: React.FC<RouteComparisonDeckProps> = ({
             </span>
           </div>
 
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1.5">
             {isAdvised ? (
               <span className="inline-flex items-center gap-1 text-[10px] font-semibold tracking-wide uppercase px-2 py-0.5 rounded bg-emerald-950/90 text-emerald-300 border border-emerald-600/60 font-mono">
                 <CheckCircle2 className="w-3 h-3 text-emerald-400" />
@@ -44,6 +81,16 @@ export const RouteComparisonDeck: React.FC<RouteComparisonDeckProps> = ({
                 <AlertOctagon className="w-3 h-3 text-rose-400" />
                 No Travel Zone
               </span>
+            )}
+
+            {onToggleOpen && (
+              <button
+                onClick={onToggleOpen}
+                className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition-colors cursor-pointer"
+                title="Minimize corridor comparison deck"
+              >
+                <PanelRightClose className="w-3.5 h-3.5" />
+              </button>
             )}
           </div>
         </div>
