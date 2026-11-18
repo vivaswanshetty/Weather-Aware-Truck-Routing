@@ -1,6 +1,8 @@
 import { AnalyzeRequest, AnalyzeResponse, PresetsResponse } from '../types/routing';
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api';
+const rawBase = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api';
+const cleanBase = rawBase.replace(/\/+$/, '');
+const API_BASE_URL = cleanBase.endsWith('/api') ? cleanBase : `${cleanBase}/api`;
 
 /**
  * Fetch predefined freight corridor presets.

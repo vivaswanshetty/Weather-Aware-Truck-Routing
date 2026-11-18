@@ -3,7 +3,7 @@ services:
   - type: web
     name: spotter-routing-backend
     runtime: python
-    buildCommand: cd backend && pip install -r requirements.txt && python manage.py migrate
+    buildCommand: cd backend && pip install -r requirements.txt && python manage.py migrate && python manage.py collectstatic --noinput
     startCommand: cd backend && gunicorn spotter_routing.wsgi:application --bind 0.0.0.0:$PORT --workers 2 --timeout 120
     envVars:
       - key: PYTHON_VERSION
