@@ -222,6 +222,11 @@ class CheckpointRiskResult:
     lat: Optional[float] = None
     lon: Optional[float] = None
     location_name: Optional[str] = None
+    index: int = 0
+    milepost: float = 0.0
+    hours_from_departure: float = 0.0
+    segment_geometry: list[list[float]] = field(default_factory=list)
+    weather_code: Optional[int] = None
 
     @property
     def overall_risk_label(self) -> str:
@@ -254,6 +259,11 @@ def evaluate_checkpoint(
     lon: Optional[float] = None,
     location_name: Optional[str] = None,
     temperature_f: Optional[float] = None,
+    index: int = 0,
+    milepost: Optional[float] = None,
+    hours_from_departure: float = 0.0,
+    segment_geometry: Optional[list[list[float]]] = None,
+    weather_code: Optional[int] = None,
 ) -> CheckpointRiskResult:
     """
     Evaluate weather conditions at a single checkpoint against risk thresholds
@@ -280,6 +290,8 @@ def evaluate_checkpoint(
     if not reasons:
         reasons.append("All weather conditions are within normal safe thresholds (LOW risk).")
 
+    mp = milepost if milepost is not None else distance_from_origin_miles
+
     return CheckpointRiskResult(
         distance_from_origin_miles=round(float(distance_from_origin_miles), 2),
         segment_miles=round(float(segment_miles), 2),
@@ -297,4 +309,9 @@ def evaluate_checkpoint(
         lat=lat,
         lon=lon,
         location_name=location_name,
+        index=index,
+        milepost=round(float(mp), 2),
+        hours_from_departure=round(float(hours_from_departure), 2),
+        segment_geometry=list(segment_geometry or []),
+        weather_code=weather_code,
     )

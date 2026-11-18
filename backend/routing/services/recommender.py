@@ -202,6 +202,11 @@ def summarize_route(
                         lat=cp.get("lat"),
                         lon=cp.get("lon"),
                         location_name=cp.get("location_name"),
+                        index=int(cp.get("index", i)),
+                        milepost=float(cp.get("milepost", cp.get("distance_from_origin_miles", 0.0))),
+                        hours_from_departure=float(cp.get("hours_from_departure", 0.0)),
+                        segment_geometry=list(cp.get("segment_geometry", [])),
+                        weather_code=cp.get("weather_code"),
                     )
                 )
             else:
@@ -221,6 +226,11 @@ def summarize_route(
                     lon=cp.get("lon"),
                     location_name=cp.get("location_name"),
                     temperature_f=cp.get("temperature_f"),
+                    index=int(cp.get("index", i)),
+                    milepost=float(cp.get("milepost", cp.get("distance_from_origin_miles", 0.0))),
+                    hours_from_departure=float(cp.get("hours_from_departure", 0.0)),
+                    segment_geometry=list(cp.get("segment_geometry", [])),
+                    weather_code=cp.get("weather_code"),
                 )
                 evaluated_checkpoints.append(evaluated)
 

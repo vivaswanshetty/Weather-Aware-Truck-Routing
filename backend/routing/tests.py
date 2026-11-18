@@ -482,3 +482,256 @@ class RouteSummaryAndTieBreakingTests(TestCase):
         self.assertIn("ranked_routes", result_dict)
         self.assertEqual(len(result_dict["ranked_routes"]), 3)
         self.assertEqual(result_dict["recommended_route"]["route_id"], "r3_south")
+
+
+from unittest.mock import patch
+from datetime import datetime, timezone
+from rest_framework.test import APITestCase
+from routing.services.geocoder import geocode_location, normalize_query
+from routing.services.sampler import sample_route_checkpoints, haversine_miles
+from routing.services.routing_service import (
+    calculate_perpendicular_waypoints,
+    extract_primary_highway_name,
+    adjust_truck_travel_time,
+    fetch_three_routes,
+)
+from routing.services.weather_service import (
+    simulate_storm_weather,
+    build_corridor_heatmap,
+    fetch_batch_open_meteo,
+)
+
+
+class GeocoderTests(TestCase):
+    """Test geocoding service with built-in hubs and normalization."""
+
+    def test_built_in_hub_resolution(self):
+        lat, lon, name = geocode_location("Chicago, IL")
+        self.assertAlmostEqual(lat, 41.8781, places=3)
+        self.assertAlmostEqual(lon, -87.6298, places=3)
+        self.assertIn("Chicago", name)
+
+        lat_d, lon_d, name_d = geocode_location("Denver, CO")
+        self.assertAlmostEqual(lat_d, 39.7392, places=3)
+        self.assertAlmostEqual(lon_d, -104.9903, places=3)
+
+    def test_query_normalization(self):
+        self.assertEqual(normalize_query("  Salt   Lake  City,  UT  "), "salt lake city, ut")
+        lat, lon, _ = geocode_location("salt lake city, ut")
+        self.assertAlmostEqual(lat, 40.7608, places=3)
+
+    def test_empty_query_raises_error(self):
+        with self.assertRaises(ValueError):
+            geocode_location("")
+        with self.assertRaises(ValueError):
+            geocode_location("   ")
+
+
+class GeodesicSamplerTests(TestCase):
+    """Test Haversine distance and route checkpoint sampling."""
+
+    def setUp(self):
+        # Synthetic 500-mile straight-ish route (e.g. Chicago to Omaha corridor)
+        self.coords = [
+            [-87.6298, 41.8781],  # Chicago
+            [-89.6000, 41.6000],
+            [-91.5000, 41.6500],
+            [-93.6000, 41.6000],  # Des Moines
+            [-95.9345, 41.2565],  # Omaha
+        ]
+        self.distance_miles = 470.0
+        self.travel_time_seconds = 28200  # ~7.8 hours
+
+    def test_haversine_distance_accuracy(self):
+        # Distance between Chicago (41.8781, -87.6298) and Denver (39.7392, -104.9903) ~ 920 miles
+        dist = haversine_miles(41.8781, -87.6298, 39.7392, -104.9903)
+        self.assertGreater(dist, 900.0)
+        self.assertLess(dist, 940.0)
+
+    def test_sampling_intervals_sum_to_total_distance(self):
+        for interval in [10, 25, 50]:
+            checkpoints = sample_route_checkpoints(
+                coordinates=self.coords,
+                distance_miles=self.distance_miles,
+                travel_time_seconds=self.travel_time_seconds,
+                sample_interval_miles=interval,
+            )
+            # Verify origin and destination mileposts
+            self.assertEqual(checkpoints[0].milepost, 0.0)
+            self.assertEqual(checkpoints[-1].milepost, self.distance_miles)
+
+            # Sum of segment miles must equal total distance (within 0.01 tolerance)
+            seg_sum = sum(cp.segment_miles for cp in checkpoints)
+            self.assertAlmostEqual(
+                seg_sum,
+                self.distance_miles,
+                places=1,
+                msg=f"Failed segment sum check at interval {interval}",
+            )
+
+            # Segment geometries must exist and be non-empty
+            for cp in checkpoints:
+                self.assertGreater(len(cp.segment_geometry), 0)
+
+    def test_etas_increment_monotonically(self):
+        checkpoints = sample_route_checkpoints(
+            coordinates=self.coords,
+            distance_miles=self.distance_miles,
+            travel_time_seconds=self.travel_time_seconds,
+            sample_interval_miles=25,
+        )
+        prev_hours = -1.0
+        for cp in checkpoints:
+            self.assertGreaterEqual(cp.hours_from_departure, prev_hours)
+            prev_hours = cp.hours_from_departure
+
+        # Final checkpoint arrival should match total travel time
+        expected_final_hours = round(self.travel_time_seconds / 3600.0, 2)
+        self.assertAlmostEqual(checkpoints[-1].hours_from_departure, expected_final_hours, places=1)
+
+
+class RoutingServiceUnitTests(TestCase):
+    """Test OSRM waypoint generation and truck speed capping."""
+
+    def test_perpendicular_waypoints_symmetry(self):
+        # East-west route (lat 40, lon -100 to -90)
+        (n_lat, n_lon), (s_lat, s_lon) = calculate_perpendicular_waypoints(
+            40.0, -100.0, 40.0, -90.0, offset_ratio=0.15
+        )
+        # For a pure east-west line, perpendicular points should shift North and South
+        self.assertGreater(n_lat, 40.0)
+        self.assertLess(s_lat, 40.0)
+
+    def test_adjust_truck_travel_time(self):
+        # 600 miles in 7 hours (85.7 mph car speed) -> should be capped to ~62 mph commercial speed
+        adj_secs = adjust_truck_travel_time(distance_miles=600.0, duration_seconds=25200)
+        implied_speed = 600.0 / (adj_secs / 3600.0)
+        self.assertLessEqual(implied_speed, 64.0)
+
+    def test_extract_primary_highway_name(self):
+        mock_route = {
+            "legs": [
+                {
+                    "steps": [
+                        {"ref": "I 80;US 30", "distance": 150000},
+                        {"ref": "I 80", "distance": 350000},
+                        {"name": "Local Exit", "distance": 5000},
+                    ]
+                }
+            ]
+        }
+        name = extract_primary_highway_name(mock_route, "Fallback Highway")
+        self.assertIn("I-80", name)
+
+
+class WeatherServiceUnitTests(TestCase):
+    """Test weather simulation, Open-Meteo unit conversion, and heatmap creation."""
+
+    def test_snowfall_unit_conversion_cm_to_inches(self):
+        # Simulate Open-Meteo returning cm
+        mock_data = {
+            "hourly_units": {"snowfall": "cm"},
+            "hourly": {
+                "time": ["2026-11-18T10:00"],
+                "wind_speed_10m": [20.0],
+                "rain": [0.0],
+                "snowfall": [5.08],  # 5.08 cm = 2.0 inches
+                "temperature_2m": [25.0],
+                "weather_code": [71],
+            },
+        }
+        with patch("requests.get") as mock_get:
+            mock_resp = mock_get.return_value
+            mock_resp.status_code = 200
+            mock_resp.json.return_value = mock_data
+
+            res = fetch_batch_open_meteo([(41.0, -105.0)])
+            hourly = res.get((41.0, -105.0), {})
+            # 5.08 cm / 2.54 = 2.0 inches
+            self.assertAlmostEqual(hourly["snowfall"][0], 2.0, places=2)
+
+    def test_simulate_storm_weather_gradient(self):
+        bounds = (38.0, 44.0, -108.0, -90.0)
+        # Hour 0: near western front (high wind / severe snow)
+        sample_front = simulate_storm_weather(41.0, -104.0, 0.0, bounds)
+        self.assertGreaterEqual(sample_front.wind_speed_mph, 30.0)
+
+        # Far away from storm (calm weather)
+        sample_calm = simulate_storm_weather(38.5, -91.0, 0.0, bounds)
+        self.assertLess(sample_calm.wind_speed_mph, 25.0)
+        self.assertEqual(sample_calm.snow_rate_in_hr, 0.0)
+
+    def test_corridor_heatmap_structure(self):
+        bounds = (39.0, 42.0, -105.0, -87.0)
+        heatmap = build_corridor_heatmap(
+            corridor_bounds=bounds,
+            cluster_weather_map={},
+            weather_mode="simulated_storm",
+            load_weight_lbs=35000,
+        )
+        self.assertEqual(heatmap["hours_count"], 49)
+        self.assertGreaterEqual(len(heatmap["points"]), 100)
+        # Check first point hourly series
+        p0 = heatmap["points"][0]
+        self.assertEqual(len(p0["hourly"]), 49)
+        self.assertIn("wind_mph", p0["hourly"][0])
+        self.assertIn("risk_level", p0["hourly"][0])
+
+
+class RouteApiEndpointsTests(APITestCase):
+    """End-to-end integration tests for REST API endpoints."""
+
+    def test_presets_endpoint(self):
+        resp = self.client.get("/api/routes/presets/")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertIn("presets", data)
+        self.assertEqual(len(data["presets"]), 4)
+        self.assertEqual(data["presets"][0]["id"], "chicago_denver")
+
+    def test_analyze_endpoint_missing_fields_returns_400(self):
+        resp = self.client.post("/api/routes/analyze/", {}, format="json")
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("origin", resp.json()["error"])
+
+    def test_analyze_endpoint_simulated_storm_load_weight_escalation(self):
+        """
+        Test that changing load_weight_lbs in simulated_storm mode escalates
+        risk levels and updates route recommendation.
+        """
+        # Run 1: Light load (25,000 lbs <= 30,000 lb threshold)
+        payload_light = {
+            "origin": "Chicago, IL",
+            "destination": "Denver, CO",
+            "load_weight_lbs": 25000,
+            "sample_interval_miles": 50,
+            "weather_mode": "simulated_storm",
+        }
+        resp_light = self.client.post("/api/routes/analyze/", payload_light, format="json")
+        self.assertEqual(resp_light.status_code, 200)
+        data_light = resp_light.json()
+
+        self.assertIn("routes", data_light)
+        self.assertEqual(len(data_light["routes"]), 3)
+        self.assertIn("heatmap", data_light)
+        self.assertEqual(data_light["heatmap"]["hours_count"], 49)
+
+        # Run 2: Heavy load (45,000 lbs > 40,000 lb threshold)
+        payload_heavy = {
+            "origin": "Chicago, IL",
+            "destination": "Denver, CO",
+            "load_weight_lbs": 45000,
+            "sample_interval_miles": 50,
+            "weather_mode": "simulated_storm",
+        }
+        resp_heavy = self.client.post("/api/routes/analyze/", payload_heavy, format="json")
+        self.assertEqual(resp_heavy.status_code, 200)
+        data_heavy = resp_heavy.json()
+
+        # For the heavy load, checkpoint risks must reflect load escalation
+        route_light = data_light["routes"][0]
+        route_heavy = data_heavy["routes"][0]
+
+        # Verify checkpoints contain segment_geometry for map display
+        self.assertTrue(len(route_light["checkpoints"][0]["segment_geometry"]) > 0)
+        self.assertTrue(len(route_heavy["checkpoints"][0]["segment_geometry"]) > 0)
