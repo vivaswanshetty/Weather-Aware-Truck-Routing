@@ -10,14 +10,21 @@ guaranteeing 3 distinct routes.
 
 from __future__ import annotations
 
+import copy
 import logging
 import math
+import time
 from typing import Any, Optional
 import requests
 
 logger = logging.getLogger(__name__)
 
 OSRM_BASE_URL = "https://router.project-osrm.org/route/v1/driving"
+
+# In-memory caches for OSRM queries and computed 3-route corridors (24-hour TTL)
+_OSRM_CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+_THREE_ROUTES_CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+_CACHE_TTL_SECS = 86400.0  # 24 hours (highway road geometry is static)
 
 
 def calculate_perpendicular_waypoints(
@@ -162,7 +169,14 @@ def query_osrm_single_pair(
     alternatives: int = 3,
     timeout: float = 6.0,
 ) -> list[dict[str, Any]]:
-    """Query OSRM driving service for a coordinate string e.g. '{lon1},{lat1};{lon2},{lat2}'."""
+    """Query OSRM driving service with 24-hour in-memory cache."""
+    cache_key = f"{coord_string}_{alternatives}"
+    now = time.time()
+    if cache_key in _OSRM_CACHE:
+        ts, cached_routes = _OSRM_CACHE[cache_key]
+        if now - ts < _CACHE_TTL_SECS:
+            return copy.deepcopy(cached_routes)
+
     url = f"{OSRM_BASE_URL}/{coord_string}"
     params = {
         "alternatives": "true" if alternatives > 1 else "false",
@@ -175,7 +189,9 @@ def query_osrm_single_pair(
         response.raise_for_status()
         data = response.json()
         if data.get("code") == "Ok":
-            return list(data.get("routes", []))
+            routes = list(data.get("routes", []))
+            _OSRM_CACHE[cache_key] = (now, copy.deepcopy(routes))
+            return routes
     except Exception as exc:
         logger.warning("OSRM query failed for %s: %s", coord_string, exc)
     return []
@@ -236,8 +252,15 @@ def fetch_three_routes(
     """
     Generate exactly 3 distinct routes between origin and destination.
     Uses OSRM multi-route alternative query, supplemented with perpendicular
-    waypoint corridors when needed.
+    waypoint corridors when needed. Results are cached in memory for sub-second repeat responses.
     """
+    cache_key = f"{origin_lat:.4f},{origin_lon:.4f}_{dest_lat:.4f},{dest_lon:.4f}"
+    now = time.time()
+    if cache_key in _THREE_ROUTES_CACHE:
+        ts, cached_3 = _THREE_ROUTES_CACHE[cache_key]
+        if now - ts < _CACHE_TTL_SECS:
+            return copy.deepcopy(cached_3)
+
     routes_found: list[dict[str, Any]] = []
     seen_distances: set[int] = set()
     used_names: set[str] = set()
@@ -364,4 +387,5 @@ def fetch_three_routes(
             "geometry": r["geometry"],
         })
 
+    _THREE_ROUTES_CACHE[cache_key] = (now, copy.deepcopy(result))
     return result

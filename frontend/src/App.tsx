@@ -102,23 +102,22 @@ export default function App() {
     });
   };
 
-  // Initial Load: Fetch presets and run initial Chicago -> Denver analysis
+  // Initial Load: Fetch presets and run initial Chicago -> Denver analysis in parallel
   useEffect(() => {
     let isMounted = true;
 
     async function init() {
-      try {
-        const pResp = await getRoutePresets();
-        if (isMounted) {
-          setPresets(pResp.presets);
-        }
-      } catch {
-        // Continue if presets fail
-      }
+      const presetsPromise = getRoutePresets()
+        .then((pResp) => {
+          if (isMounted && pResp?.presets) {
+            setPresets(pResp.presets);
+          }
+        })
+        .catch(() => {});
 
-      if (isMounted) {
-        handleAnalyze();
-      }
+      const analyzePromise = handleAnalyze();
+
+      await Promise.all([presetsPromise, analyzePromise]);
     }
 
     init();
