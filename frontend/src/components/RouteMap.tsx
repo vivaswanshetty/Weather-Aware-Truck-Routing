@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useCallback } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { RouteOption, Checkpoint, HeatmapData, HeatmapMetricMode } from '../types/routing';
@@ -19,7 +19,32 @@ interface RouteMapProps {
   isBottomChartOpen?: boolean;
 }
 
-const CARTO_DARK_STYLE = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
+// In-memory CARTO Dark Matter raster style: zero external network style/font fetch delay (instant <10ms map load)
+const CARTO_DARK_RASTER_STYLE: maplibregl.StyleSpecification = {
+  version: 8,
+  sources: {
+    'carto-dark': {
+      type: 'raster',
+      tiles: [
+        'https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
+        'https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
+        'https://c.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
+        'https://d.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
+      ],
+      tileSize: 256,
+      attribution: '&copy; <a href="https://carto.com/">CARTO</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+    },
+  },
+  layers: [
+    {
+      id: 'carto-dark-layer',
+      type: 'raster',
+      source: 'carto-dark',
+      minzoom: 0,
+      maxzoom: 20,
+    },
+  ],
+};
 
 export const RouteMap: React.FC<RouteMapProps> = ({
   routes,
@@ -37,21 +62,42 @@ export const RouteMap: React.FC<RouteMapProps> = ({
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const mapLoadedRef = useRef<boolean>(false);
+  const [isMapReady, setIsMapReady] = useState<boolean>(false);
+  const initialFitDoneRef = useRef<boolean>(false);
+
   const popupRef = useRef<maplibregl.Popup | null>(null);
   const truckMarkerRef = useRef<maplibregl.Marker | null>(null);
   const routeBadgeMarkersRef = useRef<maplibregl.Marker[]>([]);
 
+  // Synchronized refs to eliminate race conditions between async network fetch & style load
+  const routesRef = useRef<RouteOption[]>(routes);
+  const heatmapDataRef = useRef<HeatmapData | undefined>(heatmapData);
+  const activeRouteIdRef = useRef<string>(activeRouteId);
+  const forecastHourRef = useRef<number>(forecastHour);
+  const showHeatmapRef = useRef<boolean>(showHeatmap);
+  const heatmapMetricRef = useRef<HeatmapMetricMode>(heatmapMetric);
+
+  useEffect(() => { routesRef.current = routes; }, [routes]);
+  useEffect(() => { heatmapDataRef.current = heatmapData; }, [heatmapData]);
+  useEffect(() => { activeRouteIdRef.current = activeRouteId; }, [activeRouteId]);
+  useEffect(() => { forecastHourRef.current = forecastHour; }, [forecastHour]);
+  useEffect(() => { showHeatmapRef.current = showHeatmap; }, [showHeatmap]);
+  useEffect(() => { heatmapMetricRef.current = heatmapMetric; }, [heatmapMetric]);
+
   const activeRoute = routes.find((r) => r.route_id === activeRouteId) || routes[0];
+  const activeRouteRef = useRef<RouteOption | undefined>(activeRoute);
+  useEffect(() => { activeRouteRef.current = activeRoute; }, [activeRoute]);
 
   // Helper: Fit map bounds tightly to routes corridor with clearance for right deck and bottom dock
-  const fitCorridorBounds = useCallback(() => {
+  const fitCorridorBounds = useCallback((instant = false) => {
     const map = mapRef.current;
-    if (!map || !routes || routes.length === 0) return;
+    const currentRoutes = routesRef.current;
+    if (!map || !currentRoutes || currentRoutes.length === 0) return;
 
     try {
       const bounds = new maplibregl.LngLatBounds();
       let hasCoords = false;
-      for (const r of routes) {
+      for (const r of currentRoutes) {
         if (r.geometry && r.geometry.coordinates) {
           for (const coord of r.geometry.coordinates) {
             bounds.extend(coord as [number, number]);
@@ -62,21 +108,24 @@ export const RouteMap: React.FC<RouteMapProps> = ({
       if (hasCoords) {
         const rightPad = isRightDeckOpen ? 430 : 80;
         const bottomPad = isBottomChartOpen ? 220 : 120;
+        const duration = instant || !initialFitDoneRef.current ? 0 : 650;
+        initialFitDoneRef.current = true;
         map.fitBounds(bounds, {
           padding: { top: 80, bottom: bottomPad, left: 70, right: rightPad },
           maxZoom: 7.2,
-          duration: 750,
+          duration,
         });
       }
     } catch {
       // Ignore boundary errors
     }
-  }, [routes, isRightDeckOpen, isBottomChartOpen]);
+  }, [isRightDeckOpen, isBottomChartOpen]);
 
   // Helper: compute truck coordinate at forecastHour along active route
   const getTruckPosition = useCallback((): { lat: number; lon: number; currentCp: Checkpoint } | null => {
-    if (!activeRoute || !activeRoute.checkpoints || activeRoute.checkpoints.length === 0) return null;
-    const cps = activeRoute.checkpoints;
+    const currentActive = activeRouteRef.current;
+    if (!currentActive || !currentActive.checkpoints || currentActive.checkpoints.length === 0) return null;
+    const cps = currentActive.checkpoints;
 
     if (forecastHour <= cps[0].hours_from_departure) {
       return { lat: cps[0].lat, lon: cps[0].lon, currentCp: cps[0] };
@@ -98,17 +147,274 @@ export const RouteMap: React.FC<RouteMapProps> = ({
       }
     }
     return { lat: cps[0].lat, lon: cps[0].lon, currentCp: cps[0] };
-  }, [activeRoute, forecastHour]);
+  }, [forecastHour]);
+
+  // Render & update Heatmap Layer (60 FPS, updates GeoJSON source only, organic boundary feathering)
+  const updateHeatmapLayer = useCallback((
+    map: maplibregl.Map,
+    hData: HeatmapData | undefined,
+    currentRoutes: RouteOption[],
+    hour: number,
+    visible: boolean,
+    metricMode: HeatmapMetricMode
+  ) => {
+    const source = map.getSource('corridor-heatmap') as maplibregl.GeoJSONSource | undefined;
+    if (!source) return;
+
+    if (!visible || !hData || !hData.points || hData.points.length === 0) {
+      source.setData({ type: 'FeatureCollection', features: [] });
+      return;
+    }
+
+    // Downsample route coordinates for fast corridor distance feathering
+    const sampleCoords: [number, number][] = [];
+    if (currentRoutes && currentRoutes.length > 0) {
+      for (const r of currentRoutes) {
+        const c = r.geometry?.coordinates;
+        if (c) {
+          const step = Math.max(1, Math.floor(c.length / 40));
+          for (let i = 0; i < c.length; i += step) {
+            sampleCoords.push(c[i] as [number, number]);
+          }
+        }
+      }
+    }
+
+    const clampedHour = Math.max(0, Math.min(48, Math.round(hour)));
+    const features: GeoJSON.Feature[] = hData.points
+      .map((pt) => {
+        let falloff = pt.falloff;
+        if ((falloff === undefined || falloff === 1.0) && sampleCoords.length > 0) {
+          let minDist2 = Infinity;
+          const cosLat = Math.cos((pt.lat * Math.PI) / 180);
+          for (const [rLon, rLat] of sampleCoords) {
+            const dLat = pt.lat - rLat;
+            const dLon = (pt.lon - rLon) * cosLat;
+            const d2 = dLat * dLat + dLon * dLon;
+            if (d2 < minDist2) minDist2 = d2;
+          }
+          const distDeg = Math.sqrt(minDist2);
+          falloff = Math.max(0.0, Math.min(1.0, 1.0 - Math.pow(distDeg / 1.8, 1.6)));
+        }
+        falloff = falloff ?? 1.0;
+
+        // Feather outer boundary to zero - eliminate rectangular box edges
+        if (falloff <= 0.04) {
+          return null;
+        }
+
+        const metric = pt.hourly[clampedHour] || pt.hourly[0];
+        let weight = 0.2;
+
+        if (metricMode === 'risk') {
+          const baseRisk = (metric.risk_level - 1) / 4.0;
+          const windFactor = Math.min(0.2, (metric.wind_mph / 60.0) * 0.2);
+          weight = Math.max(0.14, baseRisk * 0.8 + 0.14 + windFactor);
+        } else if (metricMode === 'wind') {
+          weight = Math.max(0.12, Math.min(1.0, metric.wind_mph / 50.0));
+        } else if (metricMode === 'precip') {
+          const eqPrecip = metric.rain_in_hr + metric.snow_in_hr * 0.35;
+          weight = eqPrecip > 0.01 ? Math.max(0.18, Math.min(1.0, eqPrecip / 0.5)) : 0.05;
+        }
+
+        const featheredWeight = weight * falloff;
+
+        return {
+          type: 'Feature',
+          geometry: {
+            type: 'Point',
+            coordinates: [pt.lon, pt.lat],
+          },
+          properties: {
+            weight: Math.max(0.02, Math.min(1.0, featheredWeight)),
+            risk_level: metric.risk_level,
+            wind_mph: metric.wind_mph,
+            rain_in_hr: metric.rain_in_hr,
+            snow_in_hr: metric.snow_in_hr,
+          },
+        };
+      })
+      .filter(Boolean) as GeoJSON.Feature[];
+
+    source.setData({ type: 'FeatureCollection', features });
+  }, []);
+
+  // Render & update Routes Geometry, Segments, Checkpoints & On-Map Badges
+  const updateRouteLayers = useCallback((
+    map: maplibregl.Map,
+    currentRoutes: RouteOption[],
+    selectedRouteId: string
+  ) => {
+    if (!map || !currentRoutes || currentRoutes.length === 0) return;
+
+    const currentActive = currentRoutes.find((r) => r.route_id === selectedRouteId) || currentRoutes[0];
+
+    // A. Update secondary routes
+    const secondarySource = map.getSource('secondary-routes') as maplibregl.GeoJSONSource | undefined;
+    if (secondarySource) {
+      const secondaryFeatures: GeoJSON.Feature[] = currentRoutes
+        .filter((r) => r.route_id !== selectedRouteId)
+        .map((r) => ({
+          type: 'Feature',
+          geometry: r.geometry as unknown as GeoJSON.Geometry,
+          properties: {
+            route_id: r.route_id,
+            name: r.name,
+            total_distance_miles: r.total_distance_miles,
+          },
+        }));
+      secondarySource.setData({ type: 'FeatureCollection', features: secondaryFeatures });
+    }
+
+    // B. Update active route color-coded segments
+    const activeSegmentsSource = map.getSource('active-route-segments') as maplibregl.GeoJSONSource | undefined;
+    if (activeSegmentsSource && currentActive) {
+      const segmentFeatures: GeoJSON.Feature[] = [];
+
+      for (const cp of currentActive.checkpoints) {
+        if (cp.segment_geometry && cp.segment_geometry.length >= 2) {
+          segmentFeatures.push({
+            type: 'Feature',
+            geometry: {
+              type: 'LineString',
+              coordinates: cp.segment_geometry,
+            },
+            properties: {
+              index: cp.index,
+              milepost: cp.milepost,
+              overall_risk: cp.overall_risk,
+              risk_color: getRiskHex(cp.overall_risk),
+            },
+          });
+        }
+      }
+
+      if (segmentFeatures.length === 0 && currentActive.geometry) {
+        segmentFeatures.push({
+          type: 'Feature',
+          geometry: currentActive.geometry as unknown as GeoJSON.Geometry,
+          properties: {
+            index: 0,
+            overall_risk: currentActive.overall_route_risk,
+            risk_color: getRiskHex(currentActive.overall_route_risk),
+          },
+        });
+      }
+
+      activeSegmentsSource.setData({ type: 'FeatureCollection', features: segmentFeatures });
+    }
+
+    // C. Update active route checkpoints
+    const cpSource = map.getSource('active-checkpoints') as maplibregl.GeoJSONSource | undefined;
+    if (cpSource && currentActive) {
+      const cpFeatures: GeoJSON.Feature[] = currentActive.checkpoints.map((cp) => ({
+        type: 'Feature',
+        geometry: {
+          type: 'Point',
+          coordinates: [cp.lon, cp.lat],
+        },
+        properties: {
+          index: cp.index,
+          milepost: cp.milepost,
+          overall_risk: cp.overall_risk,
+          risk_color: getRiskHex(cp.overall_risk),
+        },
+      }));
+      cpSource.setData({ type: 'FeatureCollection', features: cpFeatures });
+    }
+
+    // D. Render On-Map Interstate Callout Badges with Smart Distance Maximization
+    routeBadgeMarkersRef.current.forEach((m) => m.remove());
+    routeBadgeMarkersRef.current = [];
+
+    const placedBadgeCoords: [number, number][] = [];
+
+    currentRoutes.forEach((r, idx) => {
+      const coords = r.geometry?.coordinates;
+      if (!coords || coords.length === 0) return;
+
+      let chosenLon = coords[Math.floor(coords.length * 0.5)][0];
+      let chosenLat = coords[Math.floor(coords.length * 0.5)][1];
+
+      if (placedBadgeCoords.length === 0) {
+        // First route: place near center (46% of path)
+        const midIdx = Math.floor(coords.length * 0.46);
+        chosenLon = coords[midIdx][0];
+        chosenLat = coords[midIdx][1];
+      } else {
+        // Subsequent routes: test candidate points along [25% .. 75%] to maximize distance to existing badges
+        let bestMinDist2 = -1;
+        const startIdx = Math.floor(coords.length * 0.25);
+        const endIdx = Math.floor(coords.length * 0.75);
+        const step = Math.max(1, Math.floor((endIdx - startIdx) / 16));
+
+        for (let i = startIdx; i <= endIdx; i += step) {
+          const candLon = coords[i][0];
+          const candLat = coords[i][1];
+          const cosLat = Math.cos((candLat * Math.PI) / 180);
+
+          let minDist2 = Infinity;
+          for (const [pLon, pLat] of placedBadgeCoords) {
+            const dLat = candLat - pLat;
+            const dLon = (candLon - pLon) * cosLat;
+            const d2 = dLat * dLat + dLon * dLon;
+            if (d2 < minDist2) minDist2 = d2;
+          }
+
+          if (minDist2 > bestMinDist2) {
+            bestMinDist2 = minDist2;
+            chosenLon = candLon;
+            chosenLat = candLat;
+          }
+        }
+      }
+
+      placedBadgeCoords.push([chosenLon, chosenLat]);
+
+      const isSelected = r.route_id === selectedRouteId;
+      const badgeEl = document.createElement('div');
+      badgeEl.className = 'route-callout-badge cursor-pointer';
+      badgeEl.style.width = 'max-content';
+      badgeEl.style.maxWidth = '220px';
+      badgeEl.style.position = 'absolute';
+      badgeEl.style.whiteSpace = 'nowrap';
+      badgeEl.style.pointerEvents = 'auto';
+      badgeEl.innerHTML = `
+        <div class="inline-flex items-center w-max max-w-[200px] whitespace-nowrap px-2 py-1 rounded border text-[10px] font-mono tabular-nums shadow-xl gap-1.5 transition-all select-none ${
+          isSelected
+            ? 'bg-[#0f172a] border-sky-400 text-sky-200 font-bold ring-2 ring-sky-400/50 scale-105 z-20'
+            : 'bg-[#0b0f17]/95 border-slate-700 text-slate-300 hover:border-slate-500 hover:text-white z-10'
+        }">
+          <span class="text-sky-400 font-bold">#${idx + 1}</span>
+          <span class="truncate max-w-[120px] font-sans">${r.name.replace(/^Via\s+/i, '')}</span>
+          <span class="text-slate-500">•</span>
+          <span>${r.travel_time_formatted}</span>
+        </div>
+      `;
+
+      badgeEl.onclick = (e) => {
+        e.stopPropagation();
+        onSelectRoute(r.route_id);
+      };
+
+      const marker = new maplibregl.Marker({ element: badgeEl, anchor: 'center' })
+        .setLngLat([chosenLon, chosenLat])
+        .addTo(map);
+
+      routeBadgeMarkersRef.current.push(marker);
+    });
+  }, [onSelectRoute]);
 
   // 1. Initialize MapLibre GL Map Instance
   useEffect(() => {
     if (!mapContainerRef.current || mapRef.current) return;
 
+    // Framed on Midwest freight corridor (Chicago - Denver) by default
     const map = new maplibregl.Map({
       container: mapContainerRef.current,
-      style: CARTO_DARK_STYLE,
-      center: [-98.5795, 39.8283],
-      zoom: 4.5,
+      style: CARTO_DARK_RASTER_STYLE,
+      center: [-96.2, 40.8],
+      zoom: 5.2,
       attributionControl: false,
     });
 
@@ -116,8 +422,9 @@ export const RouteMap: React.FC<RouteMapProps> = ({
 
     map.on('load', () => {
       mapLoadedRef.current = true;
+      setIsMapReady(true);
 
-      // A. Heatmap Radar Layer (308 points continuous meteorological field)
+      // A. Heatmap Radar Layer (448 points continuous meteorological field)
       map.addSource('corridor-heatmap', {
         type: 'geojson',
         data: { type: 'FeatureCollection', features: [] },
@@ -292,8 +599,9 @@ export const RouteMap: React.FC<RouteMapProps> = ({
       map.on('click', 'active-checkpoints-circle', (e) => {
         if (e.features && e.features[0]) {
           const props = e.features[0].properties;
-          if (props && activeRoute) {
-            const cp = activeRoute.checkpoints.find((c) => c.index === props.index);
+          const currentActive = activeRouteRef.current;
+          if (props && currentActive) {
+            const cp = currentActive.checkpoints.find((c) => c.index === props.index);
             if (cp) onSelectCheckpoint(cp);
           }
         }
@@ -325,6 +633,22 @@ export const RouteMap: React.FC<RouteMapProps> = ({
         </div>
       `;
       truckMarkerRef.current = new maplibregl.Marker({ element: truckEl, anchor: 'center' });
+
+      // If routes are already loaded before map style completes, render immediately on frame 1!
+      if (routesRef.current && routesRef.current.length > 0) {
+        updateRouteLayers(map, routesRef.current, activeRouteIdRef.current);
+        fitCorridorBounds(true);
+      }
+      if (heatmapDataRef.current && heatmapDataRef.current.points) {
+        updateHeatmapLayer(
+          map,
+          heatmapDataRef.current,
+          routesRef.current,
+          forecastHourRef.current,
+          showHeatmapRef.current,
+          heatmapMetricRef.current
+        );
+      }
     });
 
     mapRef.current = map;
@@ -333,261 +657,28 @@ export const RouteMap: React.FC<RouteMapProps> = ({
       map.remove();
       mapRef.current = null;
       mapLoadedRef.current = false;
+      setIsMapReady(false);
     };
-  }, [onSelectRoute, onSelectCheckpoint]);
+  }, [onSelectRoute, onSelectCheckpoint, updateRouteLayers, updateHeatmapLayer, fitCorridorBounds]);
 
-  // 2. Update Heatmap Radar Layer (60 FPS, updates GeoJSON source only, organic boundary feathering)
+  // 2. Update Heatmap Layer on state changes
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !mapLoadedRef.current) return;
+    if (!map || !mapLoadedRef.current || !isMapReady) return;
+    updateHeatmapLayer(map, heatmapData, routes, forecastHour, showHeatmap, heatmapMetric);
+  }, [isMapReady, forecastHour, showHeatmap, heatmapMetric, heatmapData, routes, updateHeatmapLayer]);
 
-    const source = map.getSource('corridor-heatmap') as maplibregl.GeoJSONSource | undefined;
-    if (!source) return;
-
-    if (!showHeatmap || !heatmapData || !heatmapData.points || heatmapData.points.length === 0) {
-      source.setData({ type: 'FeatureCollection', features: [] });
-      return;
-    }
-
-    // Downsample route coordinates for fast corridor distance feathering
-    const sampleCoords: [number, number][] = [];
-    if (routes && routes.length > 0) {
-      for (const r of routes) {
-        const c = r.geometry?.coordinates;
-        if (c) {
-          const step = Math.max(1, Math.floor(c.length / 40));
-          for (let i = 0; i < c.length; i += step) {
-            sampleCoords.push(c[i] as [number, number]);
-          }
-        }
-      }
-    }
-
-    const clampedHour = Math.max(0, Math.min(48, Math.round(forecastHour)));
-    const features: GeoJSON.Feature[] = heatmapData.points
-      .map((pt) => {
-        let falloff = pt.falloff;
-        if ((falloff === undefined || falloff === 1.0) && sampleCoords.length > 0) {
-          let minDist2 = Infinity;
-          const cosLat = Math.cos((pt.lat * Math.PI) / 180);
-          for (const [rLon, rLat] of sampleCoords) {
-            const dLat = pt.lat - rLat;
-            const dLon = (pt.lon - rLon) * cosLat;
-            const d2 = dLat * dLat + dLon * dLon;
-            if (d2 < minDist2) minDist2 = d2;
-          }
-          const distDeg = Math.sqrt(minDist2);
-          falloff = Math.max(0.0, Math.min(1.0, 1.0 - Math.pow(distDeg / 1.8, 1.6)));
-        }
-        falloff = falloff ?? 1.0;
-
-        // Feather outer boundary to zero - eliminate rectangular box edges
-        if (falloff <= 0.04) {
-          return null;
-        }
-
-        const metric = pt.hourly[clampedHour] || pt.hourly[0];
-        let weight = 0.2;
-
-        if (heatmapMetric === 'risk') {
-          const baseRisk = (metric.risk_level - 1) / 4.0;
-          const windFactor = Math.min(0.2, (metric.wind_mph / 60.0) * 0.2);
-          weight = Math.max(0.14, baseRisk * 0.8 + 0.14 + windFactor);
-        } else if (heatmapMetric === 'wind') {
-          weight = Math.max(0.12, Math.min(1.0, metric.wind_mph / 50.0));
-        } else if (heatmapMetric === 'precip') {
-          const eqPrecip = metric.rain_in_hr + metric.snow_in_hr * 0.35;
-          weight = eqPrecip > 0.01 ? Math.max(0.18, Math.min(1.0, eqPrecip / 0.5)) : 0.05;
-        }
-
-        const featheredWeight = weight * falloff;
-
-        return {
-          type: 'Feature',
-          geometry: {
-            type: 'Point',
-            coordinates: [pt.lon, pt.lat],
-          },
-          properties: {
-            weight: Math.max(0.02, Math.min(1.0, featheredWeight)),
-            risk_level: metric.risk_level,
-            wind_mph: metric.wind_mph,
-            rain_in_hr: metric.rain_in_hr,
-            snow_in_hr: metric.snow_in_hr,
-          },
-        };
-      })
-      .filter(Boolean) as GeoJSON.Feature[];
-
-    source.setData({ type: 'FeatureCollection', features });
-  }, [forecastHour, showHeatmap, heatmapMetric, heatmapData, routes]);
-
-  // 3. Update Routes Geometry, Segments, Checkpoints & On-Map Badges
+  // 3. Update Routes Geometry, Segments, Checkpoints & Badges on state changes
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !mapLoadedRef.current || !routes || routes.length === 0) return;
+    if (!map || !mapLoadedRef.current || !isMapReady || !routes || routes.length === 0) return;
+    updateRouteLayers(map, routes, activeRouteId);
 
-    // A. Update secondary routes
-    const secondarySource = map.getSource('secondary-routes') as maplibregl.GeoJSONSource | undefined;
-    if (secondarySource) {
-      const secondaryFeatures: GeoJSON.Feature[] = routes
-        .filter((r) => r.route_id !== activeRouteId)
-        .map((r) => ({
-          type: 'Feature',
-          geometry: r.geometry as unknown as GeoJSON.Geometry,
-          properties: {
-            route_id: r.route_id,
-            name: r.name,
-            total_distance_miles: r.total_distance_miles,
-          },
-        }));
-      secondarySource.setData({ type: 'FeatureCollection', features: secondaryFeatures });
-    }
-
-    // B. Update active route color-coded segments
-    const activeSegmentsSource = map.getSource('active-route-segments') as maplibregl.GeoJSONSource | undefined;
-    if (activeSegmentsSource && activeRoute) {
-      const segmentFeatures: GeoJSON.Feature[] = [];
-
-      for (const cp of activeRoute.checkpoints) {
-        if (cp.segment_geometry && cp.segment_geometry.length >= 2) {
-          segmentFeatures.push({
-            type: 'Feature',
-            geometry: {
-              type: 'LineString',
-              coordinates: cp.segment_geometry,
-            },
-            properties: {
-              index: cp.index,
-              milepost: cp.milepost,
-              overall_risk: cp.overall_risk,
-              risk_color: getRiskHex(cp.overall_risk),
-            },
-          });
-        }
-      }
-
-      if (segmentFeatures.length === 0 && activeRoute.geometry) {
-        segmentFeatures.push({
-          type: 'Feature',
-          geometry: activeRoute.geometry as unknown as GeoJSON.Geometry,
-          properties: {
-            index: 0,
-            overall_risk: activeRoute.overall_route_risk,
-            risk_color: getRiskHex(activeRoute.overall_route_risk),
-          },
-        });
-      }
-
-      activeSegmentsSource.setData({ type: 'FeatureCollection', features: segmentFeatures });
-    }
-
-    // C. Update active route checkpoints
-    const cpSource = map.getSource('active-checkpoints') as maplibregl.GeoJSONSource | undefined;
-    if (cpSource && activeRoute) {
-      const cpFeatures: GeoJSON.Feature[] = activeRoute.checkpoints.map((cp) => ({
-        type: 'Feature',
-        geometry: {
-          type: 'Point',
-          coordinates: [cp.lon, cp.lat],
-        },
-        properties: {
-          index: cp.index,
-          milepost: cp.milepost,
-          overall_risk: cp.overall_risk,
-          risk_color: getRiskHex(cp.overall_risk),
-        },
-      }));
-      cpSource.setData({ type: 'FeatureCollection', features: cpFeatures });
-    }
-
-    // D. Render On-Map Interstate Callout Badges with Smart Distance Maximization
-    routeBadgeMarkersRef.current.forEach((m) => m.remove());
-    routeBadgeMarkersRef.current = [];
-
-    const placedBadgeCoords: [number, number][] = [];
-
-    routes.forEach((r, idx) => {
-      const coords = r.geometry?.coordinates;
-      if (!coords || coords.length === 0) return;
-
-      let chosenLon = coords[Math.floor(coords.length * 0.5)][0];
-      let chosenLat = coords[Math.floor(coords.length * 0.5)][1];
-
-      if (placedBadgeCoords.length === 0) {
-        // First route: place near center (46% of path)
-        const midIdx = Math.floor(coords.length * 0.46);
-        chosenLon = coords[midIdx][0];
-        chosenLat = coords[midIdx][1];
-      } else {
-        // Subsequent routes: test candidate points along [25% .. 75%] to maximize distance to existing badges
-        let bestMinDist2 = -1;
-        const startIdx = Math.floor(coords.length * 0.25);
-        const endIdx = Math.floor(coords.length * 0.75);
-        const step = Math.max(1, Math.floor((endIdx - startIdx) / 16));
-
-        for (let i = startIdx; i <= endIdx; i += step) {
-          const candLon = coords[i][0];
-          const candLat = coords[i][1];
-          const cosLat = Math.cos((candLat * Math.PI) / 180);
-
-          let minDist2 = Infinity;
-          for (const [pLon, pLat] of placedBadgeCoords) {
-            const dLat = candLat - pLat;
-            const dLon = (candLon - pLon) * cosLat;
-            const d2 = dLat * dLat + dLon * dLon;
-            if (d2 < minDist2) minDist2 = d2;
-          }
-
-          if (minDist2 > bestMinDist2) {
-            bestMinDist2 = minDist2;
-            chosenLon = candLon;
-            chosenLat = candLat;
-          }
-        }
-      }
-
-      placedBadgeCoords.push([chosenLon, chosenLat]);
-
-      const isSelected = r.route_id === activeRouteId;
-      const badgeEl = document.createElement('div');
-      badgeEl.className = 'route-callout-badge cursor-pointer';
-      badgeEl.style.width = 'max-content';
-      badgeEl.style.maxWidth = '220px';
-      badgeEl.style.position = 'absolute';
-      badgeEl.style.whiteSpace = 'nowrap';
-      badgeEl.style.pointerEvents = 'auto';
-      badgeEl.innerHTML = `
-        <div class="inline-flex items-center w-max max-w-[200px] whitespace-nowrap px-2 py-1 rounded border text-[10px] font-mono tabular-nums shadow-xl gap-1.5 transition-all select-none ${
-          isSelected
-            ? 'bg-[#0f172a] border-sky-400 text-sky-200 font-bold ring-2 ring-sky-400/50 scale-105 z-20'
-            : 'bg-[#0b0f17]/95 border-slate-700 text-slate-300 hover:border-slate-500 hover:text-white z-10'
-        }">
-          <span class="text-sky-400 font-bold">#${idx + 1}</span>
-          <span class="truncate max-w-[120px] font-sans">${r.name.replace(/^Via\s+/i, '')}</span>
-          <span class="text-slate-500">•</span>
-          <span>${r.travel_time_formatted}</span>
-        </div>
-      `;
-
-      badgeEl.onclick = (e) => {
-        e.stopPropagation();
-        onSelectRoute(r.route_id);
-      };
-
-      const marker = new maplibregl.Marker({ element: badgeEl, anchor: 'center' })
-        .setLngLat([chosenLon, chosenLat])
-        .addTo(map);
-
-      routeBadgeMarkersRef.current.push(marker);
-    });
-
-    // E. Fit corridor bounds with a short delay to ensure canvas dimension is settled
     const timer = setTimeout(() => {
       fitCorridorBounds();
-    }, 80);
+    }, 60);
     return () => clearTimeout(timer);
-  }, [routes, activeRouteId, activeRoute, onSelectRoute, fitCorridorBounds]);
+  }, [isMapReady, routes, activeRouteId, updateRouteLayers, fitCorridorBounds]);
 
   // 4. Re-fit camera bounds smoothly when right deck or bottom profile chart collapses/expands
   useEffect(() => {
@@ -597,10 +688,10 @@ export const RouteMap: React.FC<RouteMapProps> = ({
     return () => clearTimeout(timer);
   }, [isRightDeckOpen, isBottomChartOpen, fitCorridorBounds]);
 
-  // 4. Update Truck Position on Slider Scrub
+  // 5. Update Truck Position on Slider Scrub
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !mapLoadedRef.current || !truckMarkerRef.current) return;
+    if (!map || !mapLoadedRef.current || !isMapReady || !truckMarkerRef.current) return;
 
     const truckPos = getTruckPosition();
     if (truckPos) {
@@ -611,12 +702,12 @@ export const RouteMap: React.FC<RouteMapProps> = ({
     } else {
       truckMarkerRef.current.remove();
     }
-  }, [forecastHour, getTruckPosition]);
+  }, [isMapReady, forecastHour, getTruckPosition]);
 
-  // 5. Open/Update Checkpoint Popup when selected
+  // 6. Open/Update Checkpoint Popup when selected
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !mapLoadedRef.current) return;
+    if (!map || !mapLoadedRef.current || !isMapReady) return;
 
     if (popupRef.current) {
       popupRef.current.remove();
@@ -687,15 +778,31 @@ export const RouteMap: React.FC<RouteMapProps> = ({
     });
 
     popupRef.current = popup;
-  }, [selectedCheckpoint, onSelectCheckpoint]);
+  }, [selectedCheckpoint, isMapReady, onSelectCheckpoint]);
 
   return (
     <div className="relative w-full h-full bg-[#070b11]">
       <div ref={mapContainerRef} className="w-full h-full" />
 
+      {/* Instant Initial Loading Radar Telemetry Overlay */}
+      {(!isMapReady || !routes || routes.length === 0) && (
+        <div className="absolute inset-0 bg-[#070b11]/90 backdrop-blur-[2px] z-20 flex flex-col items-center justify-center pointer-events-none select-none transition-opacity duration-300">
+          <div className="relative flex items-center justify-center mb-3">
+            <div className="w-10 h-10 rounded-full border border-sky-500/20 border-t-sky-400 animate-spin" />
+            <div className="absolute w-2 h-2 rounded-full bg-sky-400 animate-ping" />
+          </div>
+          <div className="text-[11px] font-mono font-semibold tracking-[0.12em] text-slate-300 uppercase">
+            INITIALIZING FREIGHT CORRIDOR RADAR
+          </div>
+          <div className="text-[10px] font-mono text-slate-500 mt-1">
+            Synchronizing OSRM geometries & atmospheric telemetry...
+          </div>
+        </div>
+      )}
+
       {/* Floating Fit Corridor Viewport Button */}
       <button
-        onClick={fitCorridorBounds}
+        onClick={() => fitCorridorBounds(false)}
         className="absolute top-4 left-14 z-10 h-8 px-2.5 rounded bg-[#0b0f17]/90 hover:bg-[#151f30] border border-slate-700/80 text-slate-300 text-[11px] font-mono flex items-center gap-1.5 shadow-lg transition-colors cursor-pointer"
         title="Fit map camera to 3-route corridor"
       >
