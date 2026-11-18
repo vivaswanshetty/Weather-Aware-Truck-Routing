@@ -2,27 +2,35 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  line-height: 1.5;
-  font-weight: 400;
-  color-scheme: dark;
+@layer base {
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    color-scheme: dark;
+    background-color: #070b11;
+  }
 }
 
-/* Custom dark scrollbar for checkpoint timeline */
+/* Tabular precision styling for all numbers */
+.telemetry-num {
+  font-family: "JetBrains Mono", monospace;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+
+/* Custom dark scrollbar */
 ::-webkit-scrollbar {
-  width: 5px;
-  height: 5px;
+  width: 4px;
+  height: 4px;
 }
 ::-webkit-scrollbar-track {
-  background: rgba(15, 23, 42, 0.6);
+  background: rgba(11, 15, 23, 0.7);
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(51, 65, 85, 0.8);
-  border-radius: 4px;
+  background: rgba(51, 65, 85, 0.6);
+  border-radius: 2px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(71, 85, 105, 1);
+  background: rgba(71, 85, 105, 0.9);
 }
 
 /* MapLibre Dark Popups */
@@ -30,40 +38,39 @@
   background: transparent !important;
   box-shadow: none !important;
   padding: 0 !important;
-  border-radius: 0.75rem !important;
+  border-radius: 6px !important;
 }
 
 .maplibregl-popup-anchor-top .maplibregl-popup-tip {
-  border-bottom-color: #0f172a !important;
+  border-bottom-color: #0b0f17 !important;
 }
 .maplibregl-popup-anchor-bottom .maplibregl-popup-tip {
-  border-top-color: #0f172a !important;
+  border-top-color: #0b0f17 !important;
 }
 .maplibregl-popup-anchor-left .maplibregl-popup-tip {
-  border-right-color: #0f172a !important;
+  border-right-color: #0b0f17 !important;
 }
 .maplibregl-popup-anchor-right .maplibregl-popup-tip {
-  border-left-color: #0f172a !important;
+  border-left-color: #0b0f17 !important;
 }
 
 .maplibregl-popup-close-button {
-  color: #94a3b8 !important;
-  font-size: 16px !important;
-  padding: 4px 8px !important;
+  color: #64748b !important;
+  font-size: 14px !important;
+  padding: 3px 6px !important;
   right: 6px !important;
   top: 6px !important;
 }
 .maplibregl-popup-close-button:hover {
-  color: #ffffff !important;
+  color: #f1f5f9 !important;
   background: transparent !important;
 }
 
-/* Animation helpers */
-@keyframes fadeIn {
-  from { opacity: 0; transform: scale(0.98); }
-  to { opacity: 1; transform: scale(1); }
+@keyframes pulseSubtle {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.85; transform: scale(1.04); }
 }
 
-.animate-fade-in {
-  animation: fadeIn 0.15s ease-out forwards;
+.animate-pulse-subtle {
+  animation: pulseSubtle 2.5s infinite ease-in-out;
 }

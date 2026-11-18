@@ -203,37 +203,37 @@ def build_corridor_heatmap(
     departure_time: Optional[datetime] = None,
 ) -> dict[str, Any]:
     """
-    Generate a 0-48 hour spatial heatmap grid (approx 100-130 points)
-    spanning the route corridor.
+    Generate a high-density 0-48 hour spatial heatmap grid (22 x 14 = 308 points)
+    spanning the route corridor with smooth Inverse Distance Weighting (IDW) interpolation.
 
     For each point, computes a 49-element array (hours 0 through 48)
-    containing [wind_mph, rain_in_hr, snow_in_hr, risk_level].
+    containing [wind_mph, rain_in_hr, snow_in_hr, temperature_f, risk_level].
     """
     min_lat, max_lat, min_lon, max_lon = corridor_bounds
 
-    # Pad bounds by ~0.8 degrees (~50 miles)
-    pad = 0.8
+    # Pad bounds by 1.8 degrees (~120 miles) for realistic synoptic context
+    pad = 1.8
     grid_min_lat = min_lat - pad
     grid_max_lat = max_lat + pad
     grid_min_lon = min_lon - pad
     grid_max_lon = max_lon + pad
 
-    rows = 11
-    cols = 11
+    cols = 22  # Longitudinal width
+    rows = 14  # Latitudinal height
     lat_step = (grid_max_lat - grid_min_lat) / max(1, rows - 1)
     lon_step = (grid_max_lon - grid_min_lon) / max(1, cols - 1)
 
     heatmap_points: list[dict[str, Any]] = []
 
-    # Pre-extract cluster keys for nearest lookup
+    # Pre-extract cluster coordinates for IDW spatial interpolation
     cluster_pts = list(cluster_weather_map.keys())
 
     for r in range(rows):
         pt_lat = round(grid_min_lat + r * lat_step, 4)
+        cos_pt = math.cos(math.radians(pt_lat))
+
         for c in range(cols):
             pt_lon = round(grid_min_lon + c * lon_step, 4)
-
-            # 49 hours array (hour 0 to 48)
             hourly_series: list[dict[str, Any]] = []
 
             if weather_mode == "simulated_storm":
@@ -253,25 +253,55 @@ def build_corridor_heatmap(
                         "risk_level": int(overall_risk),
                     })
             else:
-                # Find nearest weather cluster
+                # Live mode: Use Inverse Distance Weighting (IDW) from up to 4 nearest weather clusters
+                idw_clusters: list[tuple[float, dict[str, Any]]] = []
                 if cluster_pts:
-                    nearest_cluster = min(
-                        cluster_pts,
-                        key=lambda cpt: (pt_lat - cpt[0]) ** 2 + ((pt_lon - cpt[1]) * math.cos(math.radians(pt_lat))) ** 2,
-                    )
-                    data = cluster_weather_map.get(nearest_cluster, {})
-                    winds = data.get("wind_speed_10m", [])
-                    rains = data.get("rain", [])
-                    snows = data.get("snowfall", [])
-                    temps = data.get("temperature_2m", [])
-                else:
-                    winds, rains, snows, temps = [], [], [], []
+                    # Calculate distance squared to all clusters
+                    dist_clusters = []
+                    for cpt in cluster_pts:
+                        d2 = (pt_lat - cpt[0]) ** 2 + ((pt_lon - cpt[1]) * cos_pt) ** 2
+                        dist_clusters.append((d2, cpt))
+                    dist_clusters.sort(key=lambda x: x[0])
+
+                    # Take up to 4 nearest clusters
+                    top_k = dist_clusters[:min(4, len(dist_clusters))]
+                    total_w = 0.0
+                    for d2, cpt in top_k:
+                        w = 1.0 / (d2 + 1e-4)
+                        total_w += w
+                        idw_clusters.append((w, cluster_weather_map.get(cpt, {})))
+
+                    # Normalize weights
+                    idw_clusters = [(w / total_w, data) for w, data in idw_clusters]
 
                 for h in range(49):
-                    w = float(winds[h]) if h < len(winds) and winds[h] is not None else 12.0
-                    rn = float(rains[h]) if h < len(rains) and rains[h] is not None else 0.0
-                    sn = float(snows[h]) if h < len(snows) and snows[h] is not None else 0.0
-                    tp = float(temps[h]) if h < len(temps) and temps[h] is not None else 50.0
+                    if idw_clusters:
+                        w_interp = 0.0
+                        rn_interp = 0.0
+                        sn_interp = 0.0
+                        tp_interp = 0.0
+                        for weight_frac, data in idw_clusters:
+                            winds = data.get("wind_speed_10m", [])
+                            rains = data.get("rain", [])
+                            snows = data.get("snowfall", [])
+                            temps = data.get("temperature_2m", [])
+
+                            w_val = float(winds[h]) if h < len(winds) and winds[h] is not None else 12.0
+                            rn_val = float(rains[h]) if h < len(rains) and rains[h] is not None else 0.0
+                            sn_val = float(snows[h]) if h < len(snows) and snows[h] is not None else 0.0
+                            tp_val = float(temps[h]) if h < len(temps) and temps[h] is not None else 50.0
+
+                            w_interp += weight_frac * w_val
+                            rn_interp += weight_frac * rn_val
+                            sn_interp += weight_frac * sn_val
+                            tp_interp += weight_frac * tp_val
+
+                        w = w_interp
+                        rn = rn_interp
+                        sn = sn_interp
+                        tp = tp_interp
+                    else:
+                        w, rn, sn, tp = 12.0, 0.0, 0.0, 50.0
 
                     w_risk, _ = classify_wind_risk(w, load_weight_lbs)
                     r_risk, _ = classify_rain_risk(rn)

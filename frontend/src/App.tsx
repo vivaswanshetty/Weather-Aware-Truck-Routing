@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { RouteMap } from './components/RouteMap';
+import { RouteComparisonDeck } from './components/RouteComparisonDeck';
 import { ForecastSlider } from './components/ForecastSlider';
 import { RulesModal } from './components/RulesModal';
 import {
@@ -19,7 +20,6 @@ export default function App() {
   const [destination, setDestination] = useState<string>('Denver, CO');
   const [departureTime, setDepartureTime] = useState<string>(() => {
     const now = new Date();
-    // Round to next half hour
     now.setMinutes(Math.ceil(now.getMinutes() / 30) * 30, 0, 0);
     const offset = now.getTimezoneOffset();
     const local = new Date(now.getTime() - offset * 60000);
@@ -46,6 +46,11 @@ export default function App() {
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [isRulesModalOpen, setIsRulesModalOpen] = useState<boolean>(false);
+
+  const activeRoute = useMemo(
+    () => routes.find((r) => r.route_id === activeRouteId) || routes[0],
+    [routes, activeRouteId]
+  );
 
   // Main Analyze Handler
   const handleAnalyze = useCallback(
@@ -122,8 +127,8 @@ export default function App() {
   }, []);
 
   return (
-    <div className="flex flex-col lg:flex-row w-screen h-screen overflow-hidden bg-slate-950 font-sans">
-      {/* Sidebar: Dispatch parameters, 3-route comparison & checkpoint inspector */}
+    <div className="flex flex-col lg:flex-row w-screen h-screen overflow-hidden bg-[#070b11] font-sans antialiased">
+      {/* Left Dispatch Control Panel & Checkpoint Telemetry Table */}
       <Sidebar
         origin={origin}
         setOrigin={setOrigin}
@@ -144,15 +149,13 @@ export default function App() {
         error={error}
         routes={routes}
         activeRouteId={activeRouteId}
-        onSelectRoute={setActiveRouteId}
         selectedCheckpoint={selectedCheckpoint}
         onSelectCheckpoint={setSelectedCheckpoint}
-        recommendationReason={recommendationReason}
         onOpenRulesModal={() => setIsRulesModalOpen(true)}
       />
 
       {/* Main Map View Area */}
-      <main className="relative flex-1 h-full overflow-hidden">
+      <main className="relative flex-1 h-full overflow-hidden bg-[#070b11]">
         <RouteMap
           routes={routes}
           activeRouteId={activeRouteId}
@@ -165,7 +168,15 @@ export default function App() {
           heatmapData={heatmapData}
         />
 
-        {/* Floating 0-48h Weather Forecast Slider Bar */}
+        {/* Floating Top-Right 3-Route Comparison & Recommendation Deck */}
+        <RouteComparisonDeck
+          routes={routes}
+          activeRouteId={activeRouteId}
+          onSelectRoute={setActiveRouteId}
+          recommendationReason={recommendationReason}
+        />
+
+        {/* Floating Bottom Corridor Timeline & Weather Profile Bar */}
         <ForecastSlider
           forecastHour={forecastHour}
           onForecastHourChange={setForecastHour}
@@ -174,6 +185,9 @@ export default function App() {
           onToggleHeatmap={setShowHeatmap}
           heatmapMetric={heatmapMetric}
           onMetricChange={setHeatmapMetric}
+          checkpoints={activeRoute?.checkpoints || []}
+          selectedCheckpoint={selectedCheckpoint}
+          onSelectCheckpoint={setSelectedCheckpoint}
         />
       </main>
 
