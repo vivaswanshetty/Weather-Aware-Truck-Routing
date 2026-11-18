@@ -10,6 +10,7 @@ Endpoints:
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -186,21 +187,26 @@ class RouteAnalyzeView(APIView):
 
         corridor_bounds = (min(all_lats), max(all_lats), min(all_lons), max(all_lons))
 
-        # 5. Weather Enrichment & Risk Classification per Route
+        # 5. Weather Enrichment & Risk Classification in Parallel across routes
         prepared_routes_for_ranking: list[dict[str, Any]] = []
         cluster_weather_all: dict[Any, Any] = {}
 
-        for item in sampled_routes:
-            r = item["raw_route"]
-            cps = item["checkpoints"]
-
-            weather_samples, cluster_weather = enrich_checkpoints_with_weather(
-                checkpoints=cps,
+        def _enrich_single_route(item: dict[str, Any]):
+            samples, weather_map = enrich_checkpoints_with_weather(
+                checkpoints=item["checkpoints"],
                 weather_mode=weather_mode,
                 load_weight_lbs=load_weight_lbs,
                 corridor_bounds=corridor_bounds,
             )
+            return item, samples, weather_map
+
+        with ThreadPoolExecutor(max_workers=min(4, len(sampled_routes) or 1)) as executor:
+            enriched_items = list(executor.map(_enrich_single_route, sampled_routes))
+
+        for item, weather_samples, cluster_weather in enriched_items:
             cluster_weather_all.update(cluster_weather)
+            r = item["raw_route"]
+            cps = item["checkpoints"]
 
             evaluated_cps = []
             for cp, ws in zip(cps, weather_samples):

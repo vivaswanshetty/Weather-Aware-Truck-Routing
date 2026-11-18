@@ -14,6 +14,7 @@ import copy
 import logging
 import math
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Optional
 import requests
 
@@ -291,7 +292,7 @@ def fetch_three_routes(
                 "raw_route": r,
             })
 
-    # Step 2: If we have fewer than 3 routes, query northern and southern waypoint corridors
+    # Step 2: If we have fewer than 3 routes, query northern and southern waypoint corridors in parallel
     if len(routes_found) < 3:
         (north_lat, north_lon), (south_lat, south_lon) = calculate_perpendicular_waypoints(
             origin_lat, origin_lon, dest_lat, dest_lon, offset_ratio=0.18
@@ -304,35 +305,48 @@ def fetch_three_routes(
             ("Lower South Corridor", south_lat - 0.6, south_lon),
         ]
 
-        for corridor_label, w_lat, w_lon in corridor_queries:
-            if len(routes_found) >= 3:
-                break
-            via_coords = f"{origin_lon},{origin_lat};{w_lon},{w_lat};{dest_lon},{dest_lat}"
-            corridor_routes = query_osrm_single_pair(via_coords, alternatives=1)
+        # Query alternative corridors concurrently
+        with ThreadPoolExecutor(max_workers=len(corridor_queries)) as executor:
+            future_to_meta = {
+                executor.submit(
+                    query_osrm_single_pair,
+                    f"{origin_lon},{origin_lat};{w_lon},{w_lat};{dest_lon},{dest_lat}",
+                    alternatives=1,
+                ): (corridor_label, w_lat, w_lon)
+                for corridor_label, w_lat, w_lon in corridor_queries
+            }
 
-            for cr in corridor_routes:
-                dist_m = float(cr.get("distance", 0.0))
-                dist_miles = round(dist_m / 1609.344, 1)
-                dur_sec = float(cr.get("duration", 0.0))
-                geom = cr.get("geometry", {})
-                coords = geom.get("coordinates", [])
-
-                dist_key = int(dist_miles // 5)
-                if dist_key not in seen_distances and len(coords) >= 2:
-                    seen_distances.add(dist_key)
-                    hw_name = extract_primary_highway_name(cr, corridor_label, used_names=used_names)
-                    route_name = f"{corridor_label} ({hw_name})" if corridor_label not in hw_name else hw_name
-                    used_names.add(route_name)
-                    used_names.add(hw_name)
-                    adj_dur = adjust_truck_travel_time(dist_miles, dur_sec)
-                    routes_found.append({
-                        "name": route_name,
-                        "distance_miles": dist_miles,
-                        "travel_time_seconds": adj_dur,
-                        "geometry": geom,
-                        "raw_route": cr,
-                    })
+            for future in as_completed(future_to_meta):
+                if len(routes_found) >= 3:
                     break
+                corridor_label, w_lat, w_lon = future_to_meta[future]
+                try:
+                    corridor_routes = future.result()
+                    for cr in corridor_routes:
+                        dist_m = float(cr.get("distance", 0.0))
+                        dist_miles = round(dist_m / 1609.344, 1)
+                        dur_sec = float(cr.get("duration", 0.0))
+                        geom = cr.get("geometry", {})
+                        coords = geom.get("coordinates", [])
+
+                        dist_key = int(dist_miles // 5)
+                        if dist_key not in seen_distances and len(coords) >= 2:
+                            seen_distances.add(dist_key)
+                            hw_name = extract_primary_highway_name(cr, corridor_label, used_names=used_names)
+                            route_name = f"{corridor_label} ({hw_name})" if corridor_label not in hw_name else hw_name
+                            used_names.add(route_name)
+                            used_names.add(hw_name)
+                            adj_dur = adjust_truck_travel_time(dist_miles, dur_sec)
+                            routes_found.append({
+                                "name": route_name,
+                                "distance_miles": dist_miles,
+                                "travel_time_seconds": adj_dur,
+                                "geometry": geom,
+                                "raw_route": cr,
+                            })
+                            break
+                except Exception as exc:
+                    logger.debug("Parallel OSRM query failed for %s: %s", corridor_label, exc)
 
     # Step 3: If still fewer than 3 (e.g. OSRM is offline or rate-limiting), use robust fallbacks
     (north_lat, north_lon), (south_lat, south_lon) = calculate_perpendicular_waypoints(
