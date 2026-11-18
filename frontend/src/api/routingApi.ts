@@ -2,7 +2,7 @@ import { AnalyzeRequest, AnalyzeResponse, PresetsResponse } from '../types/routi
 
 const defaultBase = import.meta.env.DEV
   ? 'http://localhost:8000/api'
-  : 'https://spotter-routing-backend.onrender.com/api';
+  : 'https://weather-aware-truck-routing-k0ra.onrender.com/api';
 
 const rawBase = import.meta.env.VITE_API_BASE_URL || defaultBase;
 const cleanBase = rawBase.replace(/\/+$/, '');
