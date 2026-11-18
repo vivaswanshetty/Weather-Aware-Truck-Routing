@@ -11,6 +11,7 @@ import {
   Info,
   Loader2,
   Filter,
+  X,
 } from 'lucide-react';
 import {
   RouteOption,
@@ -222,9 +223,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
               type="text"
               value={origin}
               onChange={(e) => setOrigin(e.target.value)}
-              placeholder="Origin (e.g. Chicago, IL)"
-              className="w-full bg-[#070b11] border border-slate-800 rounded pl-6 pr-2 py-1 text-slate-100 placeholder-slate-600 focus:outline-none focus:border-sky-500 text-xs font-mono"
+              onFocus={(e) => e.target.select()}
+              placeholder="e.g. Chicago, IL"
+              className="w-full bg-[#070b11] border border-slate-800 rounded pl-6 pr-7 py-1 text-slate-100 placeholder-slate-500 focus:outline-none focus:border-sky-500 text-xs font-mono"
             />
+            {origin && (
+              <button
+                type="button"
+                onClick={() => setOrigin('')}
+                className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-500 hover:text-slate-300 rounded cursor-pointer"
+                title="Clear origin"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            )}
           </div>
 
           <div className="flex items-center justify-between px-1">
@@ -245,9 +257,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
               type="text"
               value={destination}
               onChange={(e) => setDestination(e.target.value)}
-              placeholder="Destination (e.g. Denver, CO)"
-              className="w-full bg-[#070b11] border border-slate-800 rounded pl-6 pr-2 py-1 text-slate-100 placeholder-slate-600 focus:outline-none focus:border-sky-500 text-xs font-mono"
+              onFocus={(e) => e.target.select()}
+              placeholder="e.g. Denver, CO"
+              className="w-full bg-[#070b11] border border-slate-800 rounded pl-6 pr-7 py-1 text-slate-100 placeholder-slate-500 focus:outline-none focus:border-sky-500 text-xs font-mono"
             />
+            {destination && (
+              <button
+                type="button"
+                onClick={() => setDestination('')}
+                className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-500 hover:text-slate-300 rounded cursor-pointer"
+                title="Clear destination"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            )}
           </div>
         </div>
 

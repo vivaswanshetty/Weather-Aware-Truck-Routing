@@ -17,6 +17,7 @@ interface RouteMapProps {
   heatmapData?: HeatmapData;
   isRightDeckOpen?: boolean;
   isBottomChartOpen?: boolean;
+  mobileTab?: 'map' | 'dispatch' | 'routes';
 }
 
 const CARTO_DARK_STYLE = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
@@ -33,6 +34,7 @@ export const RouteMap: React.FC<RouteMapProps> = ({
   heatmapData,
   isRightDeckOpen = true,
   isBottomChartOpen = true,
+  mobileTab = 'map',
 }) => {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
@@ -655,13 +657,18 @@ export const RouteMap: React.FC<RouteMapProps> = ({
     return () => clearTimeout(timer);
   }, [isMapReady, routes, activeRouteId, updateRouteLayers, fitCorridorBounds]);
 
-  // 4. Re-fit camera bounds smoothly when right deck or bottom profile chart collapses/expands
+  // 4. Re-fit camera bounds smoothly when right deck or bottom profile chart collapses/expands, or mobileTab switches
   useEffect(() => {
+    const map = mapRef.current;
+    if (map) {
+      map.resize();
+    }
     const timer = setTimeout(() => {
+      if (map) map.resize();
       fitCorridorBounds();
     }, 120);
     return () => clearTimeout(timer);
-  }, [isRightDeckOpen, isBottomChartOpen, fitCorridorBounds]);
+  }, [isRightDeckOpen, isBottomChartOpen, mobileTab, fitCorridorBounds]);
 
   // 5. Update Truck Position on Slider Scrub
   useEffect(() => {
