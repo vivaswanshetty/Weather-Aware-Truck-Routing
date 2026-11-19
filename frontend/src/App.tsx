@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { RouteMap } from './components/RouteMap';
 import { RouteComparisonDeck } from './components/RouteComparisonDeck';
@@ -53,15 +53,23 @@ export default function App() {
     return typeof window !== 'undefined' ? window.innerWidth >= 1024 : true;
   });
   const [mobileTab, setMobileTab] = useState<'map' | 'dispatch' | 'routes'>('map');
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   const activeRoute = useMemo(
     () => routes.find((r) => r.route_id === activeRouteId) || routes[0],
     [routes, activeRouteId]
   );
 
-  // Main Analyze Handler
+  // Main Analyze Handler with AbortController for race-free rapid switching
   const handleAnalyze = useCallback(
     async (customOverrides?: Partial<AnalyzeRequest>) => {
+      // Cancel previous in-flight request so fast toggling between live/storm never collides
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
+
       setIsLoading(true);
       setError(null);
 
@@ -79,7 +87,8 @@ export default function App() {
       };
 
       try {
-        const resp = await analyzeRoutes(req);
+        const resp = await analyzeRoutes(req, controller.signal);
+        if (controller.signal.aborted) return;
         setRoutes(resp.routes);
         setActiveRouteId(resp.recommended_route_id || resp.routes[0]?.route_id || 'route_1');
         setRecommendationReason(resp.recommendation_reason || resp.decision_summary);
@@ -87,10 +96,15 @@ export default function App() {
         setSelectedCheckpoint(null);
         setForecastHour(0);
       } catch (err: unknown) {
+        if (controller.signal.aborted || (err instanceof DOMException && err.name === 'AbortError')) {
+          return; // Ignore superseded request
+        }
         const msg = err instanceof Error ? err.message : 'Failed to analyze routes';
         setError(msg);
       } finally {
-        setIsLoading(false);
+        if (abortControllerRef.current === controller) {
+          setIsLoading(false);
+        }
       }
     },
     [origin, destination, departureTime, loadWeight, sampleInterval, weatherMode]

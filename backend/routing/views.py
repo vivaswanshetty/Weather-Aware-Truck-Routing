@@ -26,6 +26,7 @@ from .services import (
     evaluate_checkpoint,
     rank_and_recommend_routes,
 )
+from .services.weather_service import get_cluster_key, fetch_batch_open_meteo
 from .services.sampler import parse_datetime
 
 logger = logging.getLogger(__name__)
@@ -190,6 +191,15 @@ class RouteAnalyzeView(APIView):
         # 5. Weather Enrichment & Risk Classification in Parallel across routes
         prepared_routes_for_ranking: list[dict[str, Any]] = []
         cluster_weather_all: dict[Any, Any] = {}
+
+        # Pre-fetch all unique clusters across all routes in ONE deduplicated batch
+        if weather_mode == "live":
+            all_clusters = {
+                get_cluster_key(cp.lat, cp.lon, precision=0.25)
+                for item in sampled_routes
+                for cp in item["checkpoints"]
+            }
+            fetch_batch_open_meteo(list(all_clusters))
 
         def _enrich_single_route(item: dict[str, Any]):
             samples, weather_map = enrich_checkpoints_with_weather(

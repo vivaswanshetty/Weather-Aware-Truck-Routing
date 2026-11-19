@@ -69,8 +69,8 @@ def fetch_batch_open_meteo(
     if not to_fetch:
         return results
 
-    # Chunk requests into batches of max 40 coordinates to prevent URL overflow
-    batch_size = 40
+    # Chunk requests into batches of max 20 coordinates for fast Open-Meteo response
+    batch_size = 20
     for i in range(0, len(to_fetch), batch_size):
         chunk = to_fetch[i : i + batch_size]
         lats_str = ",".join(f"{pt[0]:.4f}" for pt in chunk)
@@ -220,8 +220,8 @@ def build_corridor_heatmap(
     grid_min_lon = min_lon - pad
     grid_max_lon = max_lon + pad
 
-    cols = 32  # Denser longitudinal resolution across East-West corridor
-    rows = 14  # Latitudinal height
+    cols = 24  # Longitudinal resolution across East-West corridor
+    rows = 12  # Latitudinal height
     lat_step = (grid_max_lat - grid_min_lat) / max(1, rows - 1)
     lon_step = (grid_max_lon - grid_min_lon) / max(1, cols - 1)
 
@@ -259,6 +259,10 @@ def build_corridor_heatmap(
                 min_d_deg = math.sqrt(min_d2)
                 # Smooth feathering: 1.0 near corridor, down to 0.0 at ~1.8 degrees away
                 falloff = max(0.0, min(1.0, 1.0 - (min_d_deg / 1.8) ** 1.6))
+
+            # Exclude points far outside corridor (frontend discards them anyway)
+            if sampled_corridor and falloff <= 0.04:
+                continue
 
             hourly_series: list[dict[str, Any]] = []
 

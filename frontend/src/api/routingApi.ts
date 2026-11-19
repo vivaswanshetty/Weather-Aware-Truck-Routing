@@ -71,30 +71,42 @@ export async function getRoutePresets(): Promise<PresetsResponse> {
 }
 
 /**
- * Perform full 3-route weather & risk analysis with automatic cold-start retry.
+ * Perform full 3-route weather & risk analysis with abort signal support.
  */
-export async function analyzeRoutes(params: AnalyzeRequest): Promise<AnalyzeResponse> {
+export async function analyzeRoutes(
+  params: AnalyzeRequest,
+  signal?: AbortSignal
+): Promise<AnalyzeResponse> {
   const url = `${API_BASE_URL}/routes/analyze/`;
-  const fetchOptions = {
+  const fetchOptions: RequestInit = {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'Accept': 'application/json',
     },
     body: JSON.stringify(params),
+    signal,
   };
 
   let response: Response;
   try {
     response = await fetch(url, fetchOptions);
-  } catch {
-    // If first request failed (e.g. Render server cold-starting), retry once after a brief pause
-    await new Promise((r) => setTimeout(r, 2500));
+  } catch (err: unknown) {
+    if (signal?.aborted || (err instanceof DOMException && err.name === 'AbortError')) {
+      throw err;
+    }
+    // If first request failed on initial cold start, retry once after a brief pause
+    await new Promise((r) => setTimeout(r, 2000));
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+
     try {
       response = await fetch(url, fetchOptions);
-    } catch {
+    } catch (retryErr: unknown) {
+      if (signal?.aborted || (retryErr instanceof DOMException && retryErr.name === 'AbortError')) {
+        throw retryErr;
+      }
       throw new Error(
-        'Backend server is waking up on Render free tier (takes ~45s on first load). Please wait a moment and click "Calculate Dispatch" again.'
+        'Unable to reach dispatch server. Please check your connection and click "Calculate Dispatch".'
       );
     }
   }
