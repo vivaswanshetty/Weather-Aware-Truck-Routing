@@ -412,11 +412,13 @@ export const RouteMap: React.FC<RouteMapProps> = ({
 
   // 1. Initialize MapLibre GL Map Instance
   useEffect(() => {
-    if (!mapContainerRef.current || mapRef.current) return;
+    const container = mapContainerRef.current;
+    if (!container || mapRef.current) return;
+    if (container.clientWidth === 0 || container.clientHeight === 0) return;
 
     // Framed on Midwest freight corridor (Chicago - Denver) by default
     const map = new maplibregl.Map({
-      container: mapContainerRef.current,
+      container,
       style: CARTO_DARK_STYLE,
       center: [-96.2, 40.8],
       zoom: 5.2,
@@ -664,7 +666,7 @@ export const RouteMap: React.FC<RouteMapProps> = ({
       mapLoadedRef.current = false;
       setIsMapReady(false);
     };
-  }, [onSelectRoute, onSelectCheckpoint, updateRouteLayers, updateHeatmapLayer, fitCorridorBounds]);
+  }, [onSelectRoute, onSelectCheckpoint, updateRouteLayers, updateHeatmapLayer, fitCorridorBounds, mobileTab]);
 
   // 2. Update Heatmap Layer on state changes
   useEffect(() => {
