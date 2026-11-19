@@ -59,12 +59,12 @@ def get_cluster_key(lat: float, lon: float, precision: float = 0.8) -> Tuple[flo
 
 def fetch_batch_open_meteo(
     coordinates: Sequence[Tuple[float, float]],
-    timeout: Tuple[float, float] = (1.5, 2.5),
+    timeout: Tuple[float, float] = (3.0, 5.0),
 ) -> dict[Tuple[float, float], dict[str, Any]]:
     """
     Fetch 2-day hourly forecasts for a batch of (lat, lon) coordinates from Open-Meteo.
-    Uses 2.0s fast timeout and an automatic circuit-breaker so external API slowdowns
-    never block users or cause 1.5-minute hangs.
+    Uses fast timeouts and an automatic circuit-breaker so external API slowdowns
+    never block users or cause hangs.
     """
     global _METEO_CIRCUIT_UNTIL
     results: dict[Tuple[float, float], dict[str, Any]] = {}
@@ -89,8 +89,8 @@ def fetch_batch_open_meteo(
     if not to_fetch:
         return results
 
-    # Chunk requests into batches of max 20 coordinates for fast Open-Meteo response
-    batch_size = 20
+    # Chunk requests into batches of max 100 coordinates (Open-Meteo multi-coordinate endpoint)
+    batch_size = 100
     for i in range(0, len(to_fetch), batch_size):
         chunk = to_fetch[i : i + batch_size]
         lats_str = ",".join(f"{pt[0]:.4f}" for pt in chunk)
