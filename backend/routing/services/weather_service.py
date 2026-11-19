@@ -59,7 +59,7 @@ def get_cluster_key(lat: float, lon: float, precision: float = 0.8) -> Tuple[flo
 
 def fetch_batch_open_meteo(
     coordinates: Sequence[Tuple[float, float]],
-    timeout: float = 2.0,
+    timeout: Tuple[float, float] = (1.5, 2.5),
 ) -> dict[Tuple[float, float], dict[str, Any]]:
     """
     Fetch 2-day hourly forecasts for a batch of (lat, lon) coordinates from Open-Meteo.
@@ -384,6 +384,7 @@ def enrich_checkpoints_with_weather(
     weather_mode: str = "live",
     load_weight_lbs: float = 0.0,
     corridor_bounds: Optional[Tuple[float, float, float, float]] = None,
+    prefetched_weather: Optional[dict[Tuple[float, float], dict[str, Any]]] = None,
 ) -> Tuple[list[WeatherSample], dict[Tuple[float, float], dict[str, Any]]]:
     """
     Query or simulate weather for each checkpoint at its exact arrival hour.
@@ -417,7 +418,10 @@ def enrich_checkpoints_with_weather(
         unique_clusters.add(c_key)
         cp_cluster_map.append(c_key)
 
-    cluster_weather = fetch_batch_open_meteo(list(unique_clusters))
+    if prefetched_weather is not None:
+        cluster_weather = prefetched_weather
+    else:
+        cluster_weather = fetch_batch_open_meteo(list(unique_clusters))
 
     samples = []
     for cp, c_key in zip(checkpoints, cp_cluster_map):

@@ -188,33 +188,30 @@ class RouteAnalyzeView(APIView):
 
         corridor_bounds = (min(all_lats), max(all_lats), min(all_lons), max(all_lons))
 
-        # 5. Weather Enrichment & Risk Classification in Parallel across routes
+        # 5. Weather Enrichment & Risk Classification across routes
         prepared_routes_for_ranking: list[dict[str, Any]] = []
         cluster_weather_all: dict[Any, Any] = {}
 
-        # Pre-fetch all unique clusters across all routes in ONE deduplicated batch
+        # Pre-fetch all unique clusters across all routes in ONE single deduplicated batch
         if weather_mode == "live":
             all_clusters = {
                 get_cluster_key(cp.lat, cp.lon, precision=0.8)
                 for item in sampled_routes
                 for cp in item["checkpoints"]
             }
-            fetch_batch_open_meteo(list(all_clusters))
+            cluster_weather_all = fetch_batch_open_meteo(list(all_clusters))
 
-        def _enrich_single_route(item: dict[str, Any]):
-            samples, weather_map = enrich_checkpoints_with_weather(
+        for item in sampled_routes:
+            weather_samples, cluster_weather = enrich_checkpoints_with_weather(
                 checkpoints=item["checkpoints"],
                 weather_mode=weather_mode,
                 load_weight_lbs=load_weight_lbs,
                 corridor_bounds=corridor_bounds,
+                prefetched_weather=cluster_weather_all if weather_mode == "live" else None,
             )
-            return item, samples, weather_map
+            if cluster_weather:
+                cluster_weather_all.update(cluster_weather)
 
-        with ThreadPoolExecutor(max_workers=min(4, len(sampled_routes) or 1)) as executor:
-            enriched_items = list(executor.map(_enrich_single_route, sampled_routes))
-
-        for item, weather_samples, cluster_weather in enriched_items:
-            cluster_weather_all.update(cluster_weather)
             r = item["raw_route"]
             cps = item["checkpoints"]
 

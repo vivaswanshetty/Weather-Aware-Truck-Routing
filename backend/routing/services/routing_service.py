@@ -168,7 +168,7 @@ def adjust_truck_travel_time(distance_miles: float, duration_seconds: float) -> 
 def query_osrm_single_pair(
     coord_string: str,
     alternatives: int = 3,
-    timeout: float = 6.0,
+    timeout: Tuple[float, float] = (1.5, 3.0),
 ) -> list[dict[str, Any]]:
     """Query OSRM driving service with 24-hour in-memory cache."""
     cache_key = f"{coord_string}_{alternatives}"
