@@ -1,0 +1,17 @@
+name: Keep Render Backend Alive
+
+on:
+  schedule:
+    # Ping every 10 minutes (Render spins down after 15 minutes of inactivity)
+    - cron: '*/10 * * * *'
+  workflow_dispatch: # Allows manual trigger from GitHub Actions dashboard
+
+jobs:
+  ping-backend:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Render Backend Service
+        run: |
+          echo "Pinging Spotter Dispatch Backend on Render at $(date)..."
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 45 "https://weather-aware-truck-routing-k0ra.onrender.com/api/routes/presets/")
+          echo "Render Backend responded with HTTP $HTTP_CODE"
