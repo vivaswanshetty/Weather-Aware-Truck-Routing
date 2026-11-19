@@ -17,9 +17,9 @@ import { getRiskBadgeClass } from './utils/riskColors';
 import { Truck, Map as MapIcon, Sliders, Navigation, ChevronRight } from 'lucide-react';
 
 export default function App() {
-  // Input parameters
-  const [origin, setOrigin] = useState<string>('Chicago, IL');
-  const [destination, setDestination] = useState<string>('Denver, CO');
+  // Input parameters - default to empty so greyed-out example placeholders show naturally
+  const [origin, setOrigin] = useState<string>('');
+  const [destination, setDestination] = useState<string>('');
   const [departureTime, setDepartureTime] = useState<string>(() => {
     const now = new Date();
     now.setMinutes(Math.ceil(now.getMinutes() / 30) * 30, 0, 0);
@@ -49,7 +49,9 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [isRulesModalOpen, setIsRulesModalOpen] = useState<boolean>(false);
   const [isRightDeckOpen, setIsRightDeckOpen] = useState<boolean>(true);
-  const [isBottomChartOpen, setIsBottomChartOpen] = useState<boolean>(true);
+  const [isBottomChartOpen, setIsBottomChartOpen] = useState<boolean>(() => {
+    return typeof window !== 'undefined' ? window.innerWidth >= 1024 : true;
+  });
   const [mobileTab, setMobileTab] = useState<'map' | 'dispatch' | 'routes'>('map');
 
   const activeRoute = useMemo(
@@ -63,9 +65,13 @@ export default function App() {
       setIsLoading(true);
       setError(null);
 
+      // Default to benchmark Chicago -> Denver corridor if user left fields blank
+      const targetOrigin = (customOverrides?.origin ?? origin).trim() || 'Chicago, IL';
+      const targetDest = (customOverrides?.destination ?? destination).trim() || 'Denver, CO';
+
       const req: AnalyzeRequest = {
-        origin: customOverrides?.origin ?? origin,
-        destination: customOverrides?.destination ?? destination,
+        origin: targetOrigin,
+        destination: targetDest,
         departure_time: customOverrides?.departure_time ?? (departureTime ? new Date(departureTime).toISOString() : undefined),
         load_weight_lbs: customOverrides?.load_weight_lbs ?? loadWeight,
         sample_interval_miles: customOverrides?.sample_interval_miles ?? sampleInterval,
@@ -243,6 +249,9 @@ export default function App() {
             isRightDeckOpen={isRightDeckOpen}
             isBottomChartOpen={isBottomChartOpen}
             mobileTab={mobileTab}
+            isLoading={isLoading}
+            error={error}
+            onRetry={() => handleAnalyze()}
           />
 
           {/* Floating Top-Right 3-Route Comparison Deck (Desktop only) */}

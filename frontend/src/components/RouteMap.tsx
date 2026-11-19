@@ -3,7 +3,7 @@ import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { RouteOption, Checkpoint, HeatmapData, HeatmapMetricMode } from '../types/routing';
 import { getRiskHex, getRiskLabel, formatTimestamp, formatHoursElapsed } from '../utils/riskColors';
-import { Maximize2 } from 'lucide-react';
+import { Maximize2, AlertTriangle } from 'lucide-react';
 
 interface RouteMapProps {
   routes: RouteOption[];
@@ -18,6 +18,9 @@ interface RouteMapProps {
   isRightDeckOpen?: boolean;
   isBottomChartOpen?: boolean;
   mobileTab?: 'map' | 'dispatch' | 'routes';
+  isLoading?: boolean;
+  error?: string | null;
+  onRetry?: () => void;
 }
 
 const CARTO_DARK_STYLE = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
@@ -35,6 +38,9 @@ export const RouteMap: React.FC<RouteMapProps> = ({
   isRightDeckOpen = true,
   isBottomChartOpen = true,
   mobileTab = 'map',
+  isLoading = false,
+  error = null,
+  onRetry,
 }) => {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
@@ -65,11 +71,14 @@ export const RouteMap: React.FC<RouteMapProps> = ({
   const activeRouteRef = useRef<RouteOption | undefined>(activeRoute);
   useEffect(() => { activeRouteRef.current = activeRoute; }, [activeRoute]);
 
-  // Helper: Fit map bounds tightly to routes corridor with clearance for right deck and bottom dock
+  // Helper: Fit map bounds tightly to routes corridor with adaptive clearance for desktop & mobile
   const fitCorridorBounds = useCallback((instant = false) => {
     const map = mapRef.current;
     const currentRoutes = routesRef.current;
     if (!map || !currentRoutes || currentRoutes.length === 0) return;
+
+    const container = map.getContainer();
+    if (!container || container.clientWidth <= 0 || container.clientHeight <= 0) return;
 
     try {
       const bounds = new maplibregl.LngLatBounds();
@@ -83,12 +92,31 @@ export const RouteMap: React.FC<RouteMapProps> = ({
         }
       }
       if (hasCoords) {
-        const rightPad = isRightDeckOpen ? 430 : 80;
-        const bottomPad = isBottomChartOpen ? 220 : 120;
+        const containerW = container.clientWidth;
+        const containerH = container.clientHeight;
+        const isMobile = containerW < 1024;
+
+        let leftPad = isMobile ? 16 : 70;
+        let rightPad = isMobile ? 16 : (isRightDeckOpen ? 430 : 80);
+        let topPad = isMobile ? 24 : 80;
+        let bottomPad = isMobile ? (isBottomChartOpen ? 180 : 100) : (isBottomChartOpen ? 220 : 120);
+
+        // Clamp padding to ensure at least 60px visible map canvas
+        if (leftPad + rightPad >= containerW - 60) {
+          const maxHorizontal = Math.max(10, Math.floor((containerW - 80) / 2));
+          leftPad = Math.min(leftPad, maxHorizontal);
+          rightPad = Math.min(rightPad, maxHorizontal);
+        }
+        if (topPad + bottomPad >= containerH - 60) {
+          const maxVertical = Math.max(10, Math.floor((containerH - 80) / 2));
+          topPad = Math.min(topPad, maxVertical);
+          bottomPad = Math.min(bottomPad, maxVertical);
+        }
+
         const duration = instant || !initialFitDoneRef.current ? 0 : 650;
         initialFitDoneRef.current = true;
         map.fitBounds(bounds, {
-          padding: { top: 80, bottom: bottomPad, left: 70, right: rightPad },
+          padding: { top: topPad, bottom: bottomPad, left: leftPad, right: rightPad },
           maxZoom: 7.2,
           duration,
         });
@@ -660,13 +688,18 @@ export const RouteMap: React.FC<RouteMapProps> = ({
   // 4. Re-fit camera bounds smoothly when right deck or bottom profile chart collapses/expands, or mobileTab switches
   useEffect(() => {
     const map = mapRef.current;
-    if (map) {
+    const container = mapContainerRef.current;
+    if (!map || !container) return;
+
+    if (container.clientWidth > 0 && container.clientHeight > 0) {
       map.resize();
     }
     const timer = setTimeout(() => {
-      if (map) map.resize();
-      fitCorridorBounds();
-    }, 120);
+      if (map && container && container.clientWidth > 0 && container.clientHeight > 0) {
+        map.resize();
+        fitCorridorBounds();
+      }
+    }, 150);
     return () => clearTimeout(timer);
   }, [isRightDeckOpen, isBottomChartOpen, mobileTab, fitCorridorBounds]);
 
@@ -766,8 +799,33 @@ export const RouteMap: React.FC<RouteMapProps> = ({
     <div className="relative w-full h-full bg-[#070b11]">
       <div ref={mapContainerRef} className="w-full h-full" />
 
-      {/* Instant Initial Loading Radar Telemetry Overlay */}
-      {(!isMapReady || !routes || routes.length === 0) && (
+      {/* Error Overlay with One-Click Retry if Dispatch Fails or Cold Starts */}
+      {error && (!routes || routes.length === 0) && (
+        <div className="absolute inset-0 bg-[#070b11]/90 backdrop-blur-sm z-30 flex flex-col items-center justify-center p-4 select-none">
+          <div className="max-w-md w-full p-5 rounded-lg bg-[#0e1420] border border-amber-500/50 shadow-2xl text-center space-y-3">
+            <div className="w-10 h-10 rounded-full bg-amber-500/10 border border-amber-500/30 flex items-center justify-center mx-auto text-amber-400">
+              <AlertTriangle className="w-5 h-5" />
+            </div>
+            <div className="text-xs font-mono font-bold text-amber-300 uppercase tracking-wider">
+              Dispatch Telemetry Service Notice
+            </div>
+            <p className="text-xs text-slate-300 leading-relaxed font-sans">
+              {error}
+            </p>
+            {onRetry && (
+              <button
+                onClick={onRetry}
+                className="px-4 py-2 bg-sky-600 hover:bg-sky-500 text-white rounded font-mono text-xs font-semibold shadow cursor-pointer transition-colors"
+              >
+                Retry Dispatch Analysis
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Initial Loading Radar Telemetry Overlay */}
+      {isLoading && (!routes || routes.length === 0) && (
         <div className="absolute inset-0 bg-[#070b11]/90 backdrop-blur-[2px] z-20 flex flex-col items-center justify-center pointer-events-none select-none transition-opacity duration-300">
           <div className="relative flex items-center justify-center mb-3">
             <div className="w-10 h-10 rounded-full border border-sky-500/20 border-t-sky-400 animate-spin" />

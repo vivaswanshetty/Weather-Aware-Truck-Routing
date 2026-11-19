@@ -86,9 +86,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
   }, [activeRouteId, routes]);
 
   const handleSwapLocations = () => {
-    const temp = origin;
-    setOrigin(destination);
-    setDestination(temp);
+    const orig = origin || 'Chicago, IL';
+    const dest = destination || 'Denver, CO';
+    setOrigin(dest);
+    setDestination(orig);
   };
 
   const handleWeightPillClick = (weight: number) => {
