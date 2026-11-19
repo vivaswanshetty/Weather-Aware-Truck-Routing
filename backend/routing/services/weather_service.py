@@ -25,6 +25,18 @@ OPEN_METEO_BASE_URL = "https://api.open-meteo.com/v1/forecast"
 # In-memory cache for weather forecasts: key -> (timestamp, forecast_data)
 _WEATHER_CACHE: dict[str, Tuple[float, dict[str, Any]]] = {}
 CACHE_TTL_SECONDS = 900  # 15 minutes
+_METEO_CIRCUIT_UNTIL = 0.0  # Circuit breaker timestamp if Open-Meteo is timing out
+
+
+def _get_default_hourly() -> dict[str, list[Any]]:
+    return {
+        "time": [],
+        "wind_speed_10m": [16.0] * 72,
+        "rain": [0.0] * 72,
+        "snowfall": [0.0] * 72,
+        "temperature_2m": [48.0] * 72,
+        "weather_code": [0] * 72,
+    }
 
 
 @dataclass
@@ -40,21 +52,29 @@ class WeatherSample:
         return asdict(self)
 
 
-def get_cluster_key(lat: float, lon: float, precision: float = 0.25) -> Tuple[float, float]:
-    """Round coordinates to precision grid (e.g. ~15 miles) for spatial clustering."""
+def get_cluster_key(lat: float, lon: float, precision: float = 0.8) -> Tuple[float, float]:
+    """Round coordinates to precision grid (e.g. ~55 miles) for spatial clustering."""
     return (round(lat / precision) * precision, round(lon / precision) * precision)
 
 
 def fetch_batch_open_meteo(
     coordinates: Sequence[Tuple[float, float]],
-    timeout: float = 8.0,
+    timeout: float = 2.0,
 ) -> dict[Tuple[float, float], dict[str, Any]]:
     """
-    Fetch 5-day hourly forecasts for a batch of (lat, lon) coordinates from Open-Meteo.
-    Returns a mapping of (lat, lon) -> hourly data dict.
+    Fetch 2-day hourly forecasts for a batch of (lat, lon) coordinates from Open-Meteo.
+    Uses 2.0s fast timeout and an automatic circuit-breaker so external API slowdowns
+    never block users or cause 1.5-minute hangs.
     """
+    global _METEO_CIRCUIT_UNTIL
     results: dict[Tuple[float, float], dict[str, Any]] = {}
     now = time.time()
+
+    # If Open-Meteo was recently timing out, immediately return fallback without blocking
+    if now < _METEO_CIRCUIT_UNTIL:
+        for pt in coordinates:
+            results[pt] = _get_default_hourly()
+        return results
 
     to_fetch: list[Tuple[float, float]] = []
     for pt in coordinates:
@@ -83,7 +103,7 @@ def fetch_batch_open_meteo(
             "wind_speed_unit": "mph",
             "precipitation_unit": "inch",
             "temperature_unit": "fahrenheit",
-            "forecast_days": 5,
+            "forecast_days": 2,
         }
 
         try:
@@ -91,14 +111,12 @@ def fetch_batch_open_meteo(
             resp.raise_for_status()
             data = resp.json()
 
-            # Open-Meteo returns a single dict if len(chunk) == 1, or a list of dicts if len(chunk) > 1
             items = data if isinstance(data, list) else [data]
 
             for pt, item in zip(chunk, items):
                 hourly = item.get("hourly", {})
                 hourly_units = item.get("hourly_units", {})
 
-                # Check if snowfall was returned in cm and convert to inches if needed
                 snow_unit = str(hourly_units.get("snowfall", "")).lower()
                 snow_values = list(hourly.get("snowfall", []))
                 if "cm" in snow_unit:
@@ -111,18 +129,16 @@ def fetch_batch_open_meteo(
                 _WEATHER_CACHE[cache_key] = (now, hourly)
 
         except Exception as exc:
-            logger.warning("Failed to fetch Open-Meteo batch for %d coordinates: %s", len(chunk), exc)
-            # Fill with fallback safe weather so pipeline doesn't fail
-            for pt in chunk:
-                fallback_hourly = {
-                    "time": [],
-                    "wind_speed_10m": [15.0] * 120,
-                    "rain": [0.0] * 120,
-                    "snowfall": [0.0] * 120,
-                    "temperature_2m": [55.0] * 120,
-                    "weather_code": [0] * 120,
-                }
-                results[pt] = fallback_hourly
+            logger.warning("Open-Meteo slow/unreachable (%s). Activating circuit breaker for 60s.", exc)
+            _METEO_CIRCUIT_UNTIL = now + 60.0
+            # Immediately fill all remaining points with safe fallback without making more stalling requests
+            for remaining_pt in to_fetch:
+                if remaining_pt not in results:
+                    fallback_hourly = _get_default_hourly()
+                    results[remaining_pt] = fallback_hourly
+                    cache_key = f"{round(remaining_pt[0], 2)}_{round(remaining_pt[1], 2)}"
+                    _WEATHER_CACHE[cache_key] = (now, fallback_hourly)
+            break
 
     return results
 
@@ -220,8 +236,8 @@ def build_corridor_heatmap(
     grid_min_lon = min_lon - pad
     grid_max_lon = max_lon + pad
 
-    cols = 24  # Longitudinal resolution across East-West corridor
-    rows = 12  # Latitudinal height
+    cols = 20  # Fast, smooth corridor resolution
+    rows = 10  # Latitudinal height
     lat_step = (grid_max_lat - grid_min_lat) / max(1, rows - 1)
     lon_step = (grid_max_lon - grid_min_lon) / max(1, cols - 1)
 
@@ -316,10 +332,11 @@ def build_corridor_heatmap(
                             snows = data.get("snowfall", [])
                             temps = data.get("temperature_2m", [])
 
-                            w_val = float(winds[h]) if h < len(winds) and winds[h] is not None else 12.0
-                            rn_val = float(rains[h]) if h < len(rains) and rains[h] is not None else 0.0
-                            sn_val = float(snows[h]) if h < len(snows) and snows[h] is not None else 0.0
-                            tp_val = float(temps[h]) if h < len(temps) and temps[h] is not None else 50.0
+                            idx = min(h, max(0, len(winds) - 1)) if winds else 0
+                            w_val = float(winds[idx]) if winds and winds[idx] is not None else 12.0
+                            rn_val = float(rains[idx]) if rains and rains[idx] is not None else 0.0
+                            sn_val = float(snows[idx]) if snows and snows[idx] is not None else 0.0
+                            tp_val = float(temps[idx]) if temps and temps[idx] is not None else 50.0
 
                             w_interp += weight_frac * w_val
                             rn_interp += weight_frac * rn_val
@@ -396,7 +413,7 @@ def enrich_checkpoints_with_weather(
     cp_cluster_map: list[Tuple[float, float]] = []
 
     for cp in checkpoints:
-        c_key = get_cluster_key(cp.lat, cp.lon, precision=0.25)
+        c_key = get_cluster_key(cp.lat, cp.lon, precision=0.8)
         unique_clusters.add(c_key)
         cp_cluster_map.append(c_key)
 
@@ -412,13 +429,14 @@ def enrich_checkpoints_with_weather(
         codes = hourly_data.get("weather_code", [])
 
         h = int(round(getattr(cp, "hours_from_departure", 0.0)))
-        h = max(0, min(119, h))  # 5 days = 120 hours
+        max_h = max(0, len(winds) - 1) if winds else 47
+        clamped_h = max(0, min(max_h, h))
 
-        w = float(winds[h]) if h < len(winds) and winds[h] is not None else 12.0
-        rn = float(rains[h]) if h < len(rains) and rains[h] is not None else 0.0
-        sn = float(snows[h]) if h < len(snows) and snows[h] is not None else 0.0
-        tp = float(temps[h]) if h < len(temps) and temps[h] is not None else 50.0
-        code = int(codes[h]) if h < len(codes) and codes[h] is not None else 0
+        w = float(winds[clamped_h]) if clamped_h < len(winds) and winds[clamped_h] is not None else 12.0
+        rn = float(rains[clamped_h]) if clamped_h < len(rains) and rains[clamped_h] is not None else 0.0
+        sn = float(snows[clamped_h]) if clamped_h < len(snows) and snows[clamped_h] is not None else 0.0
+        tp = float(temps[clamped_h]) if clamped_h < len(temps) and temps[clamped_h] is not None else 50.0
+        code = int(codes[clamped_h]) if clamped_h < len(codes) and codes[clamped_h] is not None else 0
 
         samples.append(
             WeatherSample(

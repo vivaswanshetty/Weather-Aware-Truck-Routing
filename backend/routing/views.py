@@ -195,7 +195,7 @@ class RouteAnalyzeView(APIView):
         # Pre-fetch all unique clusters across all routes in ONE deduplicated batch
         if weather_mode == "live":
             all_clusters = {
-                get_cluster_key(cp.lat, cp.lon, precision=0.25)
+                get_cluster_key(cp.lat, cp.lon, precision=0.8)
                 for item in sampled_routes
                 for cp in item["checkpoints"]
             }
