@@ -136,6 +136,14 @@ export default function App() {
     };
   }, []);
 
+  // Periodic client keep-alive ping to ensure backend stays warm while recording or testing
+  useEffect(() => {
+    const interval = setInterval(() => {
+      getRoutePresets().catch(() => {});
+    }, 4 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, []);
+
   return (
     <div className="flex flex-col w-screen h-screen overflow-hidden bg-[#070b11] font-sans antialiased">
       {/* Mobile Top App Bar with 3-Segmented Switcher (visible only on screens < lg) */}

@@ -225,6 +225,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               value={origin}
               onChange={(e) => setOrigin(e.target.value)}
               onFocus={(e) => e.target.select()}
+              onKeyDown={(e) => { if (e.key === 'Enter') onAnalyze(); }}
               placeholder="e.g. Chicago, IL"
               className="w-full bg-[#070b11] border border-slate-800 rounded pl-6 pr-7 py-1 text-slate-100 placeholder-slate-500 focus:outline-none focus:border-sky-500 text-xs font-mono"
             />
@@ -259,6 +260,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               value={destination}
               onChange={(e) => setDestination(e.target.value)}
               onFocus={(e) => e.target.select()}
+              onKeyDown={(e) => { if (e.key === 'Enter') onAnalyze(); }}
               placeholder="e.g. Denver, CO"
               className="w-full bg-[#070b11] border border-slate-800 rounded pl-6 pr-7 py-1 text-slate-100 placeholder-slate-500 focus:outline-none focus:border-sky-500 text-xs font-mono"
             />
