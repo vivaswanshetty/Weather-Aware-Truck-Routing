@@ -2,9 +2,10 @@ import { AnalyzeRequest, AnalyzeResponse, PresetsResponse } from '../types/routi
 
 const defaultBase = import.meta.env.DEV
   ? 'http://localhost:8000/api'
-  : 'https://weather-aware-truck-routing-k0ra.onrender.com/api';
+  : '/api';
 
-const rawBase = import.meta.env.VITE_API_BASE_URL || defaultBase;
+// In production, use same-origin '/api' proxy via Vercel rewrites to permanently eliminate browser CORS blocks
+const rawBase = import.meta.env.DEV ? (import.meta.env.VITE_API_BASE_URL || defaultBase) : '/api';
 const cleanBase = rawBase.replace(/\/+$/, '');
 const API_BASE_URL = cleanBase.endsWith('/api') ? cleanBase : `${cleanBase}/api`;
 
