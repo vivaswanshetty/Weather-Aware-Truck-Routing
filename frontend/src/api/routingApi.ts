@@ -112,6 +112,24 @@ export async function analyzeRoutes(
   }
 
   if (!response.ok) {
+    if ((response.status === 502 || response.status === 503 || response.status === 504) && !signal?.aborted) {
+      // Render free-tier cold-start transient 502/504: retry once after a short pause
+      await new Promise((r) => setTimeout(r, 4000));
+      if (!signal?.aborted) {
+        try {
+          const retryResp = await fetch(url, fetchOptions);
+          if (retryResp.ok) {
+            return retryResp.json();
+          }
+        } catch {
+          // Fall through to error
+        }
+      }
+      throw new Error(
+        'Backend service is waking up on free tier (~30-45s cold start). Please wait a moment and click "Calculate Dispatch" again.'
+      );
+    }
+
     let errMessage = `Server returned HTTP ${response.status}`;
     try {
       const errData = await response.json();
